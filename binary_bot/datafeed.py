@@ -231,6 +231,17 @@ def _normalize_message_to_snapshot(payload: Dict[str, Any], default_market_id: s
 def _extract_token_ids_from_market_row(row: Dict[str, Any]) -> List[str]:
     token_ids: List[str] = []
 
+    clob_token_ids = row.get("clobTokenIds")
+    if isinstance(clob_token_ids, str):
+        try:
+            decoded = json.loads(clob_token_ids)
+            if isinstance(decoded, list):
+                token_ids.extend(str(v) for v in decoded if v is not None)
+        except (TypeError, ValueError):
+            pass
+    elif isinstance(clob_token_ids, list):
+        token_ids.extend(str(v) for v in clob_token_ids if v is not None)
+
     tokens = row.get("tokens")
     if isinstance(tokens, list):
         for token in tokens:
@@ -298,10 +309,17 @@ def discover_polymarket_asset_ids(
         raise RuntimeError("Gamma market discovery returned no market rows")
 
     asset_ids: List[str] = []
-    for market in markets[: max(1, market_limit)]:
+    valid_markets_collected = 0
+    for market in markets:
+        if market.get("enableOrderBook") is False:
+            continue
+
         ids = _extract_token_ids_from_market_row(market)
         if ids:
             asset_ids.extend(ids)
+            valid_markets_collected += 1
+            if valid_markets_collected >= max(1, market_limit):
+                break
 
     # Preserve order and drop duplicates.
     deduped: List[str] = []
@@ -401,8 +419,9 @@ class PolymarketLiveDataFeed:
     def _connect(self) -> websocket.WebSocket:
         ws = websocket.create_connection(self.ws_url, timeout=float(self.feed_timeout_sec))
         sub_payload = {
-            "type": "subscribe",
-            "asset_ids": self.asset_ids,
+            "assets_ids": self.asset_ids,
+            "type": "market",
+            "custom_feature_enabled": True,
         }
         ws.send(json.dumps(sub_payload))
         return ws
