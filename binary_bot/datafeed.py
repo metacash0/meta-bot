@@ -428,6 +428,14 @@ class MockDataFeed:
 
             time.sleep(self.tick_interval_sec)
 
+    def monitoring_state(self) -> Dict[str, Any]:
+        return {
+            "reconnect_count": 0,
+            "last_message_wallclock": None,
+            "last_snapshot_wallclock": None,
+            "last_snapshot_ts": None,
+        }
+
 
 class PolymarketLiveDataFeed:
     def __init__(self):
@@ -457,6 +465,7 @@ class PolymarketLiveDataFeed:
         self.reconnect_count = 0
         self.last_snapshot_ts: Optional[float] = None
         self.last_message_wallclock: Optional[float] = None
+        self.last_snapshot_wallclock: Optional[float] = None
 
         self.asset_ids = discover_polymarket_asset_ids(
             gamma_url=self.gamma_url,
@@ -533,6 +542,8 @@ class PolymarketLiveDataFeed:
                         continue
                     snapshot = _normalize_message_to_snapshot(message, default_market_id="polymarket")
                     if snapshot is not None:
+                        receive_wallclock = float(time.time())
+                        self.last_snapshot_wallclock = receive_wallclock
                         self.last_snapshot_ts = float(snapshot.ts)
                         if self.debug_raw and normalized_logged < self.debug_raw_limit:
                             _safe_append_jsonl(
@@ -565,6 +576,14 @@ class PolymarketLiveDataFeed:
                         pass
                     ws = None
                 time.sleep(backoff)
+
+    def monitoring_state(self) -> Dict[str, Any]:
+        return {
+            "reconnect_count": int(self.reconnect_count),
+            "last_message_wallclock": self.last_message_wallclock,
+            "last_snapshot_wallclock": self.last_snapshot_wallclock,
+            "last_snapshot_ts": self.last_snapshot_ts,
+        }
 
 
 def get_default_feed(

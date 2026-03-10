@@ -163,6 +163,9 @@ def summarize_snapshot_monitoring(snaps: List[Dict[str, Any]]) -> Dict[str, floa
             "latest_snapshot_age_sec": 0.0,
             "avg_snapshot_gap_sec": 0.0,
             "max_snapshot_gap_sec": 0.0,
+            "p50_snapshot_gap_sec": 0.0,
+            "p95_snapshot_gap_sec": 0.0,
+            "p99_snapshot_gap_sec": 0.0,
         }
 
     sorted_snaps = sorted(snaps, key=lambda row: float(row.get("ts", 0.0)))
@@ -182,12 +185,56 @@ def summarize_snapshot_monitoring(snaps: List[Dict[str, Any]]) -> Dict[str, floa
             "latest_snapshot_age_sec": float(latest_age),
             "avg_snapshot_gap_sec": 0.0,
             "max_snapshot_gap_sec": 0.0,
+            "p50_snapshot_gap_sec": 0.0,
+            "p95_snapshot_gap_sec": 0.0,
+            "p99_snapshot_gap_sec": 0.0,
         }
+
+    sorted_gaps = sorted(gaps)
+
+    def _percentile_nearest_rank(values: List[float], pct: float) -> float:
+        if not values:
+            return 0.0
+        rank = int((pct * len(values)) + 0.999999999)
+        rank = max(1, min(rank, len(values)))
+        return float(values[rank - 1])
 
     return {
         "latest_snapshot_age_sec": float(latest_age),
         "avg_snapshot_gap_sec": float(sum(gaps) / len(gaps)),
         "max_snapshot_gap_sec": float(max(gaps)),
+        "p50_snapshot_gap_sec": _percentile_nearest_rank(sorted_gaps, 0.50),
+        "p95_snapshot_gap_sec": _percentile_nearest_rank(sorted_gaps, 0.95),
+        "p99_snapshot_gap_sec": _percentile_nearest_rank(sorted_gaps, 0.99),
+    }
+
+
+def summarize_heartbeat_monitoring(events: List[Dict[str, Any]]) -> Dict[str, float]:
+    heartbeats = [row for row in events if row.get("event_type") == "heartbeat"]
+    if not heartbeats:
+        return {
+            "max_reconnect_count": 0.0,
+            "latest_heartbeat_snapshot_age_sec": 0.0,
+            "latest_message_age_sec": 0.0,
+            "latest_snapshot_wallclock_age_sec": 0.0,
+        }
+
+    max_reconnect = 0
+    for row in heartbeats:
+        payload = row.get("payload", {})
+        try:
+            max_reconnect = max(max_reconnect, int(payload.get("reconnect_count", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+
+    latest_payload = heartbeats[-1].get("payload", {})
+    return {
+        "max_reconnect_count": float(max_reconnect),
+        "latest_heartbeat_snapshot_age_sec": float(latest_payload.get("snapshot_age_sec", 0.0) or 0.0),
+        "latest_message_age_sec": float(latest_payload.get("last_message_age_sec", 0.0) or 0.0),
+        "latest_snapshot_wallclock_age_sec": float(
+            latest_payload.get("last_snapshot_wallclock_age_sec", 0.0) or 0.0
+        ),
     }
 
 
@@ -202,6 +249,7 @@ def main() -> None:
     fill_summary = summarize_fills(fills)
     snap_summary = summarize_snapshots(snaps)
     snap_monitoring = summarize_snapshot_monitoring(snaps)
+    heartbeat_monitoring = summarize_heartbeat_monitoring(events)
     canceled_orders = count_canceled_orders(events)
     last_fill = summarize_last_fill(fills)
 
@@ -241,9 +289,18 @@ def main() -> None:
     print("Monitoring")
     print(f"  Heartbeats: {event_summary['heartbeat_count']}")
     print(f"  Stale feed warnings: {event_summary['stale_warning_count']}")
+    print(f"  Max reconnect count: {int(heartbeat_monitoring['max_reconnect_count'])}")
     print(f"  Latest snapshot age sec: {snap_monitoring['latest_snapshot_age_sec']:.2f}")
+    print(f"  Latest heartbeat snapshot age sec: {heartbeat_monitoring['latest_heartbeat_snapshot_age_sec']:.2f}")
+    print(f"  Latest message age sec: {heartbeat_monitoring['latest_message_age_sec']:.2f}")
+    print(
+        f"  Latest snapshot wallclock age sec: {heartbeat_monitoring['latest_snapshot_wallclock_age_sec']:.2f}"
+    )
     print(f"  Avg snapshot gap sec: {snap_monitoring['avg_snapshot_gap_sec']:.2f}")
     print(f"  Max snapshot gap sec: {snap_monitoring['max_snapshot_gap_sec']:.2f}")
+    print(f"  P50 snapshot gap sec: {snap_monitoring['p50_snapshot_gap_sec']:.2f}")
+    print(f"  P95 snapshot gap sec: {snap_monitoring['p95_snapshot_gap_sec']:.2f}")
+    print(f"  P99 snapshot gap sec: {snap_monitoring['p99_snapshot_gap_sec']:.2f}")
     print()
 
     print("Orders")

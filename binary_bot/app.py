@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from binary_bot.datafeed import get_default_feed
 from binary_bot.journal import Journal
@@ -122,6 +122,34 @@ class TradingBot:
         try:
             for snap in feed.snapshots():
                 now = float(time.time())
+                snapshot_age_sec = max(0.0, float(now - float(snap.ts)))
+                monitor: Dict[str, Any] = {}
+                feed_monitor = getattr(feed, "monitoring_state", None)
+                if callable(feed_monitor):
+                    try:
+                        raw_monitor = feed_monitor()
+                        if isinstance(raw_monitor, dict):
+                            monitor = raw_monitor
+                    except Exception:
+                        monitor = {}
+
+                reconnect_count = int(monitor.get("reconnect_count", 0) or 0)
+                last_message_wallclock = monitor.get("last_message_wallclock")
+                last_snapshot_feed_wallclock = monitor.get("last_snapshot_wallclock")
+                last_message_age_sec = 0.0
+                last_snapshot_wallclock_age_sec = 0.0
+                if last_message_wallclock is not None:
+                    try:
+                        last_message_age_sec = max(0.0, float(now - float(last_message_wallclock)))
+                    except (TypeError, ValueError):
+                        last_message_age_sec = 0.0
+                if last_snapshot_feed_wallclock is not None:
+                    try:
+                        last_snapshot_wallclock_age_sec = max(
+                            0.0, float(now - float(last_snapshot_feed_wallclock))
+                        )
+                    except (TypeError, ValueError):
+                        last_snapshot_wallclock_age_sec = 0.0
 
                 if (now - last_heartbeat_wallclock) >= heartbeat_sec:
                     last_snapshot_age = 0.0
@@ -136,6 +164,10 @@ class TradingBot:
                             "positions": len(self.state.positions),
                             "halted": bool(self.state.halted),
                             "last_snapshot_age_sec": float(last_snapshot_age),
+                            "snapshot_age_sec": float(snapshot_age_sec),
+                            "reconnect_count": int(reconnect_count),
+                            "last_message_age_sec": float(last_message_age_sec),
+                            "last_snapshot_wallclock_age_sec": float(last_snapshot_wallclock_age_sec),
                         },
                     )
                     last_heartbeat_wallclock = now
@@ -154,18 +186,16 @@ class TradingBot:
                 last_snapshot_wallclock = now
                 stale_warning_emitted = False
 
-                feed_reconnect_count = getattr(feed, "reconnect_count", None)
-                if isinstance(feed_reconnect_count, int):
-                    if last_seen_reconnect_count is None:
-                        last_seen_reconnect_count = feed_reconnect_count
-                    elif feed_reconnect_count > last_seen_reconnect_count:
-                        self.journal.event(
-                            "feed_reconnect_seen",
-                            {
-                                "reconnect_count": int(feed_reconnect_count),
-                            },
-                        )
-                        last_seen_reconnect_count = feed_reconnect_count
+                if last_seen_reconnect_count is None:
+                    last_seen_reconnect_count = reconnect_count
+                elif reconnect_count > last_seen_reconnect_count:
+                    self.journal.event(
+                        "feed_reconnect_seen",
+                        {
+                            "reconnect_count": int(reconnect_count),
+                        },
+                    )
+                    last_seen_reconnect_count = reconnect_count
 
                 self.on_snapshot(snap=snap)
         except KeyboardInterrupt:
