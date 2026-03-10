@@ -66,6 +66,46 @@ class TradingBot:
             },
         )
 
+        candidate_reason = str(meta.get("reason", signal.reason))
+        should_emit_candidate = signal.action in {"BUY", "SELL"} or candidate_reason in {
+            "stake_zero",
+            "ev_gate_block",
+            "edge_too_small",
+        }
+        if should_emit_candidate:
+            self.journal.event(
+                "candidate_trade",
+                {
+                    "ts": float(snap.ts),
+                    "market_id": str(signal.market_id),
+                    "action": str(signal.action),
+                    "reason": str(candidate_reason),
+                    "equity": float(equity),
+                    "bid": float(meta.get("bid", snap.bid)),
+                    "ask": float(meta.get("ask", snap.ask)),
+                    "mid": float(meta.get("mid", snap.mid)),
+                    "spread": float(meta.get("spread", snap.spread)),
+                    "p_fair": float(meta.get("p_fair", signal.p_fair)),
+                    "p_exec": float(meta.get("p_exec", signal.p_exec)),
+                    "ci_lo": float(meta.get("ci_lo", 0.0)),
+                    "ci_hi": float(meta.get("ci_hi", 0.0)),
+                    "edge": float(meta.get("edge", signal.edge)),
+                    "edge_abs": float(meta.get("edge_abs", abs(signal.edge))),
+                    "regime": str(signal.regime),
+                    "toxicity": float(meta.get("toxicity", signal.toxicity)),
+                    "tox_reg": str(meta.get("tox_reg", "")),
+                    "trend_strength": float(meta.get("trend_strength", 0.0)),
+                    "pf_latency_mult": float(meta.get("pf_latency_mult", 0.0)),
+                    "book_mid_gap": float(meta.get("book_mid_gap", 0.0)),
+                    "ev_est": float(meta.get("ev_est", 0.0)),
+                    "ev_req": float(meta.get("ev_req", 0.0)),
+                    "stake_base": float(meta.get("stake_base", 0.0)),
+                    "stake_scaled": float(meta.get("stake_scaled", 0.0)),
+                    "min_edge": float(meta.get("min_edge", self.strategy.min_edge)),
+                    "min_ev_per_dollar": float(meta.get("min_ev_per_dollar", self.strategy.min_ev_per_dollar)),
+                },
+            )
+
         if signal.action == "HOLD":
             return
 

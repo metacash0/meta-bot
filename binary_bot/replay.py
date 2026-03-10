@@ -248,6 +248,80 @@ def summarize_heartbeat_monitoring(events: List[Dict[str, Any]]) -> Dict[str, fl
     }
 
 
+def summarize_candidate_trades(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    candidate_rows = [row for row in events if row.get("event_type") == "candidate_trade"]
+    if not candidate_rows:
+        return {
+            "count": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "reason_counts": Counter(),
+            "action_reason_counts": Counter(),
+            "avg_edge": 0.0,
+            "avg_edge_abs": 0.0,
+            "avg_ev_est": 0.0,
+            "avg_ev_req": 0.0,
+            "avg_stake_base": 0.0,
+            "avg_stake_scaled": 0.0,
+        }
+
+    reason_counts = Counter()
+    action_reason_counts = Counter()
+    buy_count = 0
+    sell_count = 0
+
+    edge_vals: List[float] = []
+    edge_abs_vals: List[float] = []
+    ev_est_vals: List[float] = []
+    ev_req_vals: List[float] = []
+    stake_base_vals: List[float] = []
+    stake_scaled_vals: List[float] = []
+
+    def _append_numeric(values: List[float], payload: Dict[str, Any], key: str) -> None:
+        try:
+            values.append(float(payload.get(key, 0.0)))
+        except (TypeError, ValueError):
+            return
+
+    for row in candidate_rows:
+        payload = row.get("payload", {})
+        action = str(payload.get("action", ""))
+        reason = str(payload.get("reason", "unknown"))
+        reason_counts[reason] += 1
+        action_reason_counts["%s/%s" % (action, reason)] += 1
+
+        if action == "BUY":
+            buy_count += 1
+        elif action == "SELL":
+            sell_count += 1
+
+        _append_numeric(edge_vals, payload, "edge")
+        _append_numeric(edge_abs_vals, payload, "edge_abs")
+        _append_numeric(ev_est_vals, payload, "ev_est")
+        _append_numeric(ev_req_vals, payload, "ev_req")
+        _append_numeric(stake_base_vals, payload, "stake_base")
+        _append_numeric(stake_scaled_vals, payload, "stake_scaled")
+
+    def _avg(values: List[float]) -> float:
+        if not values:
+            return 0.0
+        return float(sum(values) / len(values))
+
+    return {
+        "count": len(candidate_rows),
+        "buy_count": int(buy_count),
+        "sell_count": int(sell_count),
+        "reason_counts": reason_counts,
+        "action_reason_counts": action_reason_counts,
+        "avg_edge": _avg(edge_vals),
+        "avg_edge_abs": _avg(edge_abs_vals),
+        "avg_ev_est": _avg(ev_est_vals),
+        "avg_ev_req": _avg(ev_req_vals),
+        "avg_stake_base": _avg(stake_base_vals),
+        "avg_stake_scaled": _avg(stake_scaled_vals),
+    }
+
+
 def main() -> None:
     events = read_jsonl(os.path.join(LOG_DIR, "events.jsonl"))
     orders = read_jsonl(os.path.join(LOG_DIR, "orders.jsonl"))
@@ -260,6 +334,7 @@ def main() -> None:
     snap_summary = summarize_snapshots(snaps)
     snap_monitoring = summarize_snapshot_monitoring(snaps)
     heartbeat_monitoring = summarize_heartbeat_monitoring(events)
+    candidate_summary = summarize_candidate_trades(events)
     canceled_orders = count_canceled_orders(events)
     last_fill = summarize_last_fill(fills)
 
@@ -316,6 +391,25 @@ def main() -> None:
     print(f"  P50 snapshot gap sec: {snap_monitoring['p50_snapshot_gap_sec']:.2f}")
     print(f"  P95 snapshot gap sec: {snap_monitoring['p95_snapshot_gap_sec']:.2f}")
     print(f"  P99 snapshot gap sec: {snap_monitoring['p99_snapshot_gap_sec']:.2f}")
+    print()
+
+    print("Candidate Trades")
+    print(f"  Total: {candidate_summary['count']}")
+    print(f"  BUY candidates: {candidate_summary['buy_count']}")
+    print(f"  SELL candidates: {candidate_summary['sell_count']}")
+    print("  By reason:")
+    for k, v in sorted(candidate_summary["reason_counts"].items()):
+        print(f"    {k}: {v}")
+    print(f"  Avg edge: {candidate_summary['avg_edge']:.4f}")
+    print(f"  Avg edge_abs: {candidate_summary['avg_edge_abs']:.4f}")
+    print(f"  Avg ev_est: {candidate_summary['avg_ev_est']:.4f}")
+    print(f"  Avg ev_req: {candidate_summary['avg_ev_req']:.4f}")
+    print(f"  Avg stake_base: {candidate_summary['avg_stake_base']:.4f}")
+    print(f"  Avg stake_scaled: {candidate_summary['avg_stake_scaled']:.4f}")
+    if candidate_summary["action_reason_counts"]:
+        print("  Action/reason:")
+        for k, v in sorted(candidate_summary["action_reason_counts"].items()):
+            print(f"    {k}: {v}")
     print()
 
     print("Orders")

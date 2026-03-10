@@ -103,6 +103,34 @@ class Strategy:
 
         edge = float(p_exec - snap.mid)
         edge_abs = abs(edge)
+        base_meta: Dict[str, float | str] = {
+            **feats,
+            "market_id": str(snap.market_id),
+            "bid": float(snap.bid),
+            "ask": float(snap.ask),
+            "mid": float(snap.mid),
+            "spread": float(snap.spread),
+            "p_fair": float(p_fair),
+            "p_exec": float(p_exec),
+            "ci_lo": float(ci[0]),
+            "ci_hi": float(ci[1]),
+            "edge": float(edge),
+            "edge_abs": float(edge_abs),
+            "regime_mode": str(feats.get("regime_mode", "")),
+            "toxicity": float(feats.get("toxicity", 0.0)),
+            "tox_reg": str(feats.get("tox_reg", "")),
+            "trend_strength": float(feats.get("trend_strength", 0.0)),
+            "pf_latency_mult": float(feats.get("pf_latency_mult", 0.0)),
+            "book_mid_gap": float(snap.mid - ((snap.bid + snap.ask) / 2.0)),
+            "ev_est": 0.0,
+            "ev_req": 0.0,
+            "stake_base": 0.0,
+            "stake_scaled": 0.0,
+            "min_edge": float(self.min_edge),
+            "min_ev_per_dollar": float(self.min_ev_per_dollar),
+            "action": "",
+            "reason": "",
+        }
 
         if edge_abs < self.min_edge:
             sig = Signal(
@@ -118,12 +146,9 @@ class Strategy:
                 reason="edge_too_small",
             )
             meta = {
-                **feats,
-                "ci_lo": float(ci[0]),
-                "ci_hi": float(ci[1]),
-                "ev_est": 0.0,
-                "stake_base": 0.0,
-                "stake_scaled": 0.0,
+                **base_meta,
+                "action": "HOLD",
+                "reason": "edge_too_small",
             }
             return sig, meta
 
@@ -170,12 +195,11 @@ class Strategy:
                 reason="stake_zero",
             )
             meta = {
-                **feats,
-                "ci_lo": float(ci[0]),
-                "ci_hi": float(ci[1]),
-                "ev_est": 0.0,
+                **base_meta,
                 "stake_base": float(stake_base),
                 "stake_scaled": 0.0,
+                "action": "HOLD",
+                "reason": "stake_zero",
             }
             return sig, meta
 
@@ -211,12 +235,13 @@ class Strategy:
                 reason="ev_gate_block",
             )
             meta = {
-                **feats,
-                "ci_lo": float(ci[0]),
-                "ci_hi": float(ci[1]),
+                **base_meta,
                 "ev_est": float(ev_est),
+                "ev_req": float(ev_req),
                 "stake_base": float(stake_base),
                 "stake_scaled": float(stake),
+                "action": "HOLD",
+                "reason": "ev_gate_block",
             }
             return sig, meta
 
@@ -233,11 +258,12 @@ class Strategy:
             reason="edge_and_ev_ok",
         )
         meta = {
-            **feats,
-            "ci_lo": float(ci[0]),
-            "ci_hi": float(ci[1]),
+            **base_meta,
             "ev_est": float(ev_est),
+            "ev_req": float(ev_req),
             "stake_base": float(stake_base),
             "stake_scaled": float(stake),
+            "action": str(side),
+            "reason": "edge_and_ev_ok",
         }
         return sig, meta
