@@ -55,6 +55,18 @@ def _as_float(value: Any) -> Optional[float]:
         return None
 
 
+def _safe_append_jsonl(path: str, payload: Dict[str, Any]) -> None:
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        # Debug logging must never break feed processing.
+        return
+
+
 def _iter_candidate_payloads(message: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     data = message.get("data")
     if isinstance(data, dict):
@@ -116,17 +128,19 @@ def _extract_top_bid(payload: Dict[str, Any]) -> Tuple[Optional[float], float]:
 
         bids = candidate.get("bids")
         if isinstance(bids, list) and bids:
-            price, size = _extract_price_size(bids[0])
-            if price is not None:
-                return price, size
+            for level in bids:
+                price, size = _extract_price_size(level)
+                if price is not None and 0.0 <= float(price) <= 1.0:
+                    return float(price), float(size)
 
         book = candidate.get("book")
         if isinstance(book, dict):
             book_bids = book.get("bids")
             if isinstance(book_bids, list) and book_bids:
-                price, size = _extract_price_size(book_bids[0])
-                if price is not None:
-                    return price, size
+                for level in book_bids:
+                    price, size = _extract_price_size(level)
+                    if price is not None and 0.0 <= float(price) <= 1.0:
+                        return float(price), float(size)
 
     return None, 0.0
 
@@ -148,17 +162,19 @@ def _extract_top_ask(payload: Dict[str, Any]) -> Tuple[Optional[float], float]:
 
         asks = candidate.get("asks")
         if isinstance(asks, list) and asks:
-            price, size = _extract_price_size(asks[0])
-            if price is not None:
-                return price, size
+            for level in asks:
+                price, size = _extract_price_size(level)
+                if price is not None and 0.0 <= float(price) <= 1.0:
+                    return float(price), float(size)
 
         book = candidate.get("book")
         if isinstance(book, dict):
             book_asks = book.get("asks")
             if isinstance(book_asks, list) and book_asks:
-                price, size = _extract_price_size(book_asks[0])
-                if price is not None:
-                    return price, size
+                for level in book_asks:
+                    price, size = _extract_price_size(level)
+                    if price is not None and 0.0 <= float(price) <= 1.0:
+                        return float(price), float(size)
 
     return None, 0.0
 
@@ -210,11 +226,17 @@ def _normalize_message_to_snapshot(payload: Dict[str, Any], default_market_id: s
     if bid is None or ask is None:
         return None
 
-    if bid > ask:
-        bid, ask = ask, bid
+    if float(bid) < 0.0 or float(bid) > 1.0:
+        return None
+    if float(ask) < 0.0 or float(ask) > 1.0:
+        return None
+    if float(bid) >= float(ask):
+        return None
+    if (float(ask) - float(bid)) > 0.20:
+        return None
 
     mid = (float(bid) + float(ask)) / 2.0
-    if last is None:
+    if last is None or float(last) < 0.0 or float(last) > 1.0:
         last = mid
 
     return MarketSnapshot(
@@ -407,6 +429,12 @@ class PolymarketLiveDataFeed:
         self.closed = _env_bool("POLYMARKET_CLOSED", False)
         self.feed_timeout_sec = _env_float("POLYMARKET_FEED_TIMEOUT_SEC", 30.0)
         self.ping_interval_sec = _env_float("POLYMARKET_PING_INTERVAL_SEC", 15.0)
+        self.debug_raw = _env_bool("POLYMARKET_DEBUG_RAW", False)
+        self.debug_raw_limit = _env_int("POLYMARKET_DEBUG_RAW_LIMIT", 20)
+        self.debug_log_path = os.getenv(
+            "POLYMARKET_DEBUG_LOG_PATH",
+            "binary_bot/logs/polymarket_debug.jsonl",
+        )
 
         self.asset_ids = discover_polymarket_asset_ids(
             gamma_url=self.gamma_url,
@@ -433,6 +461,8 @@ class PolymarketLiveDataFeed:
         reconnect_attempt = 0
         ws: Optional[websocket.WebSocket] = None
         last_ping = time.time()
+        raw_logged = 0
+        normalized_logged = 0
 
         while True:
             try:
@@ -453,6 +483,17 @@ class PolymarketLiveDataFeed:
                 if isinstance(raw, bytes):
                     raw = raw.decode("utf-8", errors="ignore")
 
+                if self.debug_raw and raw_logged < self.debug_raw_limit:
+                    _safe_append_jsonl(
+                        self.debug_log_path,
+                        {
+                            "kind": "raw_message",
+                            "ts": float(time.time()),
+                            "payload": raw,
+                        },
+                    )
+                    raw_logged += 1
+
                 try:
                     payload = json.loads(raw)
                 except (TypeError, ValueError):
@@ -467,6 +508,16 @@ class PolymarketLiveDataFeed:
                 for message in messages:
                     snapshot = _normalize_message_to_snapshot(message, default_market_id="polymarket")
                     if snapshot is not None:
+                        if self.debug_raw and normalized_logged < self.debug_raw_limit:
+                            _safe_append_jsonl(
+                                self.debug_log_path,
+                                {
+                                    "kind": "normalized_snapshot",
+                                    "ts": float(time.time()),
+                                    "payload": snapshot.__dict__,
+                                },
+                            )
+                            normalized_logged += 1
                         yield snapshot
 
             except KeyboardInterrupt:
