@@ -172,19 +172,25 @@ class TradingBot:
                     )
                     last_heartbeat_wallclock = now
 
-                if last_snapshot_wallclock is not None:
-                    gap = now - last_snapshot_wallclock
-                    if gap > stale_feed_sec and not stale_warning_emitted:
-                        stale_warning_emitted = True
+                stale_seconds: Optional[float] = None
+                if last_message_wallclock is not None:
+                    stale_seconds = max(0.0, float(now - float(last_message_wallclock)))
+                elif last_snapshot_wallclock is not None:
+                    stale_seconds = max(0.0, float(now - last_snapshot_wallclock))
+
+                if stale_seconds is not None and stale_seconds > stale_feed_sec:
+                    if not stale_warning_emitted:
                         self.journal.event(
                             "stale_feed_warning",
                             {
-                                "seconds_since_snapshot": float(gap),
+                                "seconds_since_snapshot": float(stale_seconds),
                             },
                         )
+                    stale_warning_emitted = True
+                else:
+                    stale_warning_emitted = False
 
                 last_snapshot_wallclock = now
-                stale_warning_emitted = False
 
                 if last_seen_reconnect_count is None:
                     last_seen_reconnect_count = reconnect_count
