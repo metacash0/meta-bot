@@ -73,11 +73,12 @@ class TradingBot:
             "edge_too_small",
         }
         if should_emit_candidate:
+            candidate_market_id = str(meta.get("market_id", signal.market_id))
             self.journal.event(
                 "candidate_trade",
                 {
                     "ts": float(snap.ts),
-                    "market_id": str(signal.market_id),
+                    "market_id": candidate_market_id,
                     "action": str(signal.action),
                     "reason": str(candidate_reason),
                     "equity": float(equity),

@@ -322,6 +322,75 @@ def summarize_candidate_trades(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def summarize_candidate_trades_by_market(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    candidate_rows = [row for row in events if row.get("event_type") == "candidate_trade"]
+    by_market: Dict[str, Dict[str, Any]] = {}
+
+    def _append_numeric(values: List[float], payload: Dict[str, Any], key: str) -> None:
+        try:
+            values.append(float(payload.get(key, 0.0)))
+        except (TypeError, ValueError):
+            return
+
+    for row in candidate_rows:
+        payload = row.get("payload", {})
+        market_id = str(payload.get("market_id", "unknown"))
+        action = str(payload.get("action", ""))
+        reason = str(payload.get("reason", "unknown"))
+
+        if market_id not in by_market:
+            by_market[market_id] = {
+                "market_id": market_id,
+                "count": 0,
+                "buy_count": 0,
+                "sell_count": 0,
+                "reason_counts": Counter(),
+                "edge_abs_vals": [],
+                "ev_est_vals": [],
+                "ev_req_vals": [],
+                "stake_base_vals": [],
+                "stake_scaled_vals": [],
+            }
+
+        agg = by_market[market_id]
+        agg["count"] += 1
+        if action == "BUY":
+            agg["buy_count"] += 1
+        elif action == "SELL":
+            agg["sell_count"] += 1
+        agg["reason_counts"][reason] += 1
+
+        _append_numeric(agg["edge_abs_vals"], payload, "edge_abs")
+        _append_numeric(agg["ev_est_vals"], payload, "ev_est")
+        _append_numeric(agg["ev_req_vals"], payload, "ev_req")
+        _append_numeric(agg["stake_base_vals"], payload, "stake_base")
+        _append_numeric(agg["stake_scaled_vals"], payload, "stake_scaled")
+
+    def _avg(values: List[float]) -> float:
+        if not values:
+            return 0.0
+        return float(sum(values) / len(values))
+
+    out: List[Dict[str, Any]] = []
+    for market_id, agg in by_market.items():
+        out.append(
+            {
+                "market_id": market_id,
+                "count": int(agg["count"]),
+                "buy_count": int(agg["buy_count"]),
+                "sell_count": int(agg["sell_count"]),
+                "reason_counts": agg["reason_counts"],
+                "avg_edge_abs": _avg(agg["edge_abs_vals"]),
+                "avg_ev_est": _avg(agg["ev_est_vals"]),
+                "avg_ev_req": _avg(agg["ev_req_vals"]),
+                "avg_stake_base": _avg(agg["stake_base_vals"]),
+                "avg_stake_scaled": _avg(agg["stake_scaled_vals"]),
+            }
+        )
+
+    return sorted(out, key=lambda row: row["count"], reverse=True)
+
+
 def main() -> None:
     events = read_jsonl(os.path.join(LOG_DIR, "events.jsonl"))
     orders = read_jsonl(os.path.join(LOG_DIR, "orders.jsonl"))
@@ -335,6 +404,7 @@ def main() -> None:
     snap_monitoring = summarize_snapshot_monitoring(snaps)
     heartbeat_monitoring = summarize_heartbeat_monitoring(events)
     candidate_summary = summarize_candidate_trades(events)
+    candidate_by_market = summarize_candidate_trades_by_market(events)
     canceled_orders = count_canceled_orders(events)
     last_fill = summarize_last_fill(fills)
 
@@ -391,6 +461,7 @@ def main() -> None:
     print(f"  P50 snapshot gap sec: {snap_monitoring['p50_snapshot_gap_sec']:.2f}")
     print(f"  P95 snapshot gap sec: {snap_monitoring['p95_snapshot_gap_sec']:.2f}")
     print(f"  P99 snapshot gap sec: {snap_monitoring['p99_snapshot_gap_sec']:.2f}")
+    print(f"  Unique markets in candidate trades: {len(candidate_by_market)}")
     print()
 
     print("Candidate Trades")
@@ -411,6 +482,27 @@ def main() -> None:
         for k, v in sorted(candidate_summary["action_reason_counts"].items()):
             print(f"    {k}: {v}")
     print()
+
+    print("Candidate Trades by Market")
+    if not candidate_by_market:
+        print("  none")
+    else:
+        for row in candidate_by_market:
+            print(f"  {row['market_id']}")
+            print(f"    Total: {row['count']} | BUY: {row['buy_count']} | SELL: {row['sell_count']}")
+            reasons = ", ".join(
+                f"{k}={v}" for k, v in sorted(row["reason_counts"].items(), key=lambda item: (-item[1], item[0]))
+            )
+            print(f"    Reasons: {reasons}")
+            print(
+                "    Avg edge_abs: %.4f | Avg ev_est: %.4f | Avg ev_req: %.4f"
+                % (row["avg_edge_abs"], row["avg_ev_est"], row["avg_ev_req"])
+            )
+            print(
+                "    Avg stake_base: %.4f | Avg stake_scaled: %.4f"
+                % (row["avg_stake_base"], row["avg_stake_scaled"])
+            )
+            print()
 
     print("Orders")
     print(f"  Submitted: {order_summary['submitted_count']}")
