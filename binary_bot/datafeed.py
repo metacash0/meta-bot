@@ -446,12 +446,17 @@ class PolymarketLiveDataFeed:
         self.closed = _env_bool("POLYMARKET_CLOSED", False)
         self.feed_timeout_sec = _env_float("POLYMARKET_FEED_TIMEOUT_SEC", 30.0)
         self.ping_interval_sec = _env_float("POLYMARKET_PING_INTERVAL_SEC", 15.0)
+        self.heartbeat_sec = _env_float("POLYMARKET_HEARTBEAT_SEC", 10.0)
+        self.stale_feed_sec = _env_float("POLYMARKET_STALE_FEED_SEC", 15.0)
         self.debug_raw = _env_bool("POLYMARKET_DEBUG_RAW", False)
         self.debug_raw_limit = _env_int("POLYMARKET_DEBUG_RAW_LIMIT", 20)
         self.debug_log_path = os.getenv(
             "POLYMARKET_DEBUG_LOG_PATH",
             "binary_bot/logs/polymarket_debug.jsonl",
         )
+        self.reconnect_count = 0
+        self.last_snapshot_ts: Optional[float] = None
+        self.last_message_wallclock: Optional[float] = None
 
         self.asset_ids = discover_polymarket_asset_ids(
             gamma_url=self.gamma_url,
@@ -496,6 +501,7 @@ class PolymarketLiveDataFeed:
                 raw = ws.recv()
                 if raw is None:
                     continue
+                self.last_message_wallclock = float(time.time())
 
                 if isinstance(raw, bytes):
                     raw = raw.decode("utf-8", errors="ignore")
@@ -527,6 +533,7 @@ class PolymarketLiveDataFeed:
                         continue
                     snapshot = _normalize_message_to_snapshot(message, default_market_id="polymarket")
                     if snapshot is not None:
+                        self.last_snapshot_ts = float(snapshot.ts)
                         if self.debug_raw and normalized_logged < self.debug_raw_limit:
                             _safe_append_jsonl(
                                 self.debug_log_path,
@@ -548,6 +555,7 @@ class PolymarketLiveDataFeed:
                 raise
             except Exception:
                 reconnect_attempt += 1
+                self.reconnect_count += 1
                 backoff = min(30.0, 1.0 + reconnect_attempt * 2.0)
                 print("[datafeed] websocket reconnect attempt=%d sleep=%.1fs" % (reconnect_attempt, backoff))
                 if ws is not None:

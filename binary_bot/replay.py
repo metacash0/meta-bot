@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections import Counter
 from typing import Any, Dict, List, Optional
 
@@ -62,6 +63,8 @@ def summarize_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "signal_actions": signal_actions,
         "signal_reasons": signal_reasons,
         "risk_reasons": risk_reasons,
+        "heartbeat_count": int(counter.get("heartbeat", 0)),
+        "stale_warning_count": int(counter.get("stale_feed_warning", 0)),
         "bot_start": bot_start,
         "bot_stop": bot_stop,
     }
@@ -154,6 +157,40 @@ def summarize_snapshots(snaps: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def summarize_snapshot_monitoring(snaps: List[Dict[str, Any]]) -> Dict[str, float]:
+    if not snaps:
+        return {
+            "latest_snapshot_age_sec": 0.0,
+            "avg_snapshot_gap_sec": 0.0,
+            "max_snapshot_gap_sec": 0.0,
+        }
+
+    sorted_snaps = sorted(snaps, key=lambda row: float(row.get("ts", 0.0)))
+    ts_values = [float(row.get("ts", 0.0)) for row in sorted_snaps]
+    latest_ts = ts_values[-1]
+    latest_age = max(0.0, float(time.time()) - latest_ts)
+
+    gaps: List[float] = []
+    if len(ts_values) >= 2:
+        prev = ts_values[0]
+        for cur in ts_values[1:]:
+            gaps.append(max(0.0, float(cur - prev)))
+            prev = cur
+
+    if not gaps:
+        return {
+            "latest_snapshot_age_sec": float(latest_age),
+            "avg_snapshot_gap_sec": 0.0,
+            "max_snapshot_gap_sec": 0.0,
+        }
+
+    return {
+        "latest_snapshot_age_sec": float(latest_age),
+        "avg_snapshot_gap_sec": float(sum(gaps) / len(gaps)),
+        "max_snapshot_gap_sec": float(max(gaps)),
+    }
+
+
 def main() -> None:
     events = read_jsonl(os.path.join(LOG_DIR, "events.jsonl"))
     orders = read_jsonl(os.path.join(LOG_DIR, "orders.jsonl"))
@@ -164,6 +201,7 @@ def main() -> None:
     order_summary = summarize_orders(orders)
     fill_summary = summarize_fills(fills)
     snap_summary = summarize_snapshots(snaps)
+    snap_monitoring = summarize_snapshot_monitoring(snaps)
     canceled_orders = count_canceled_orders(events)
     last_fill = summarize_last_fill(fills)
 
@@ -198,6 +236,14 @@ def main() -> None:
     print("Risk check reasons")
     for k, v in sorted(event_summary["risk_reasons"].items()):
         print(f"  {k}: {v}")
+    print()
+
+    print("Monitoring")
+    print(f"  Heartbeats: {event_summary['heartbeat_count']}")
+    print(f"  Stale feed warnings: {event_summary['stale_warning_count']}")
+    print(f"  Latest snapshot age sec: {snap_monitoring['latest_snapshot_age_sec']:.2f}")
+    print(f"  Avg snapshot gap sec: {snap_monitoring['avg_snapshot_gap_sec']:.2f}")
+    print(f"  Max snapshot gap sec: {snap_monitoring['max_snapshot_gap_sec']:.2f}")
     print()
 
     print("Orders")

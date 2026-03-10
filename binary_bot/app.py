@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 from typing import Dict, Optional
 
 from binary_bot.datafeed import get_default_feed
@@ -101,6 +103,12 @@ class TradingBot:
             tick_interval_sec=float(tick_interval_sec),
             total_ticks=int(total_ticks),
         )
+        heartbeat_sec = float(os.getenv("POLYMARKET_HEARTBEAT_SEC", "10"))
+        stale_feed_sec = float(os.getenv("POLYMARKET_STALE_FEED_SEC", "15"))
+        last_heartbeat_wallclock = float(time.time())
+        last_snapshot_wallclock: Optional[float] = None
+        stale_warning_emitted = False
+        last_seen_reconnect_count: Optional[int] = None
 
         self.journal.event(
             "bot_start",
@@ -113,6 +121,52 @@ class TradingBot:
 
         try:
             for snap in feed.snapshots():
+                now = float(time.time())
+
+                if (now - last_heartbeat_wallclock) >= heartbeat_sec:
+                    last_snapshot_age = 0.0
+                    if last_snapshot_wallclock is not None:
+                        last_snapshot_age = float(now - last_snapshot_wallclock)
+                    self.journal.event(
+                        "heartbeat",
+                        {
+                            "bankroll": float(self.state.bankroll),
+                            "realized_pnl": float(self.state.realized_pnl),
+                            "open_orders": len(self.state.open_orders),
+                            "positions": len(self.state.positions),
+                            "halted": bool(self.state.halted),
+                            "last_snapshot_age_sec": float(last_snapshot_age),
+                        },
+                    )
+                    last_heartbeat_wallclock = now
+
+                if last_snapshot_wallclock is not None:
+                    gap = now - last_snapshot_wallclock
+                    if gap > stale_feed_sec and not stale_warning_emitted:
+                        stale_warning_emitted = True
+                        self.journal.event(
+                            "stale_feed_warning",
+                            {
+                                "seconds_since_snapshot": float(gap),
+                            },
+                        )
+
+                last_snapshot_wallclock = now
+                stale_warning_emitted = False
+
+                feed_reconnect_count = getattr(feed, "reconnect_count", None)
+                if isinstance(feed_reconnect_count, int):
+                    if last_seen_reconnect_count is None:
+                        last_seen_reconnect_count = feed_reconnect_count
+                    elif feed_reconnect_count > last_seen_reconnect_count:
+                        self.journal.event(
+                            "feed_reconnect_seen",
+                            {
+                                "reconnect_count": int(feed_reconnect_count),
+                            },
+                        )
+                        last_seen_reconnect_count = feed_reconnect_count
+
                 self.on_snapshot(snap=snap)
         except KeyboardInterrupt:
             self.journal.event("bot_interrupt", {"reason": "keyboard_interrupt"})
