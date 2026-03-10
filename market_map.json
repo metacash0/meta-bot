@@ -1,0 +1,14 @@
+{
+  "markets": [
+    {
+      "name": "example_soccer_home_win_market",
+      "fixture_id": 123456,
+      "sport": "soccer",
+      "market_type": "home_win",
+      "yes_asset_id": "REPLACE_WITH_REAL_YES_ASSET_ID",
+      "no_asset_id": "REPLACE_WITH_REAL_NO_ASSET_ID",
+      "home_team": "Example Home",
+      "away_team": "Example Away"
+    }
+  ]
+}

@@ -391,6 +391,55 @@ def summarize_candidate_trades_by_market(events: List[Dict[str, Any]]) -> List[D
     return sorted(out, key=lambda row: row["count"], reverse=True)
 
 
+def summarize_sports_state_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    sports_rows = [row for row in events if row.get("event_type") == "sports_state"]
+    latest_by_fixture: Dict[int, Dict[str, Any]] = {}
+    counts_by_fixture: Counter = Counter()
+
+    def _to_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return int(default)
+
+    for row in sports_rows:
+        payload = row.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+        try:
+            fixture_id = int(payload.get("fixture_id", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if fixture_id <= 0:
+            continue
+        counts_by_fixture[fixture_id] += 1
+        latest_by_fixture[fixture_id] = payload
+
+    fixture_rows: List[Dict[str, Any]] = []
+    for fixture_id in sorted(latest_by_fixture.keys()):
+        payload = latest_by_fixture[fixture_id]
+        fixture_rows.append(
+            {
+                "fixture_id": fixture_id,
+                "count": int(counts_by_fixture.get(fixture_id, 0)),
+                "home_team": str(payload.get("home_team", "") or ""),
+                "away_team": str(payload.get("away_team", "") or ""),
+                "minute": _to_int(payload.get("minute", 0), 0),
+                "score_home": _to_int(payload.get("score_home", 0), 0),
+                "score_away": _to_int(payload.get("score_away", 0), 0),
+                "red_home": _to_int(payload.get("red_home", 0), 0),
+                "red_away": _to_int(payload.get("red_away", 0), 0),
+                "status_short": str(payload.get("status_short", "") or ""),
+            }
+        )
+
+    return {
+        "total_events": len(sports_rows),
+        "unique_fixtures": len(fixture_rows),
+        "fixtures": fixture_rows,
+    }
+
+
 def main() -> None:
     events = read_jsonl(os.path.join(LOG_DIR, "events.jsonl"))
     orders = read_jsonl(os.path.join(LOG_DIR, "orders.jsonl"))
@@ -405,6 +454,7 @@ def main() -> None:
     heartbeat_monitoring = summarize_heartbeat_monitoring(events)
     candidate_summary = summarize_candidate_trades(events)
     candidate_by_market = summarize_candidate_trades_by_market(events)
+    sports_state_summary = summarize_sports_state_events(events)
     canceled_orders = count_canceled_orders(events)
     last_fill = summarize_last_fill(fills)
 
@@ -503,6 +553,26 @@ def main() -> None:
                 % (row["avg_stake_base"], row["avg_stake_scaled"])
             )
             print()
+
+    print("Sports State")
+    print(f"  Total sports_state events: {sports_state_summary['total_events']}")
+    print(f"  Unique fixtures: {sports_state_summary['unique_fixtures']}")
+    for row in sports_state_summary["fixtures"]:
+        print(
+            "  %s | %s vs %s | latest minute %s | latest score %s-%s | red %s-%s | status %s"
+            % (
+                row["fixture_id"],
+                row["home_team"],
+                row["away_team"],
+                row["minute"],
+                row["score_home"],
+                row["score_away"],
+                row["red_home"],
+                row["red_away"],
+                row["status_short"],
+            )
+        )
+    print()
 
     print("Orders")
     print(f"  Submitted: {order_summary['submitted_count']}")

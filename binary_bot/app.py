@@ -8,6 +8,8 @@ from binary_bot.datafeed import get_default_feed
 from binary_bot.journal import Journal
 from binary_bot.oms import PaperOMS
 from binary_bot.risk import RiskManager
+from binary_bot.sports_state import SoccerStateStore, summarize_state
+from binary_bot.sportsfeed import SoccerSportsFeed, get_tracked_fixture_ids_from_market_map
 from binary_bot.state import BotState
 from binary_bot.strategy import Strategy
 
@@ -37,6 +39,10 @@ class TradingBot:
         )
         self.risk = RiskManager()
         self.oms = PaperOMS(journal=self.journal, order_ttl_sec=float(order_ttl_sec))
+        self.sports_feed = SoccerSportsFeed()
+        self.soccer_state = SoccerStateStore()
+        self._tracked_fixture_ids = get_tracked_fixture_ids_from_market_map()
+        self._last_sports_poll_wallclock = 0.0
 
     def on_snapshot(
         self,
@@ -163,6 +169,19 @@ class TradingBot:
         try:
             for snap in feed.snapshots():
                 now = float(time.time())
+
+                if (now - self._last_sports_poll_wallclock) >= float(self.sports_feed.poll_interval_sec):
+                    self._last_sports_poll_wallclock = now
+                    sports_rows = self.sports_feed.poll_live_fixtures()
+                    self.soccer_state.update_from_fixture_rows(sports_rows)
+
+                    if self._tracked_fixture_ids:
+                        for state in self.soccer_state.get_all_states():
+                            fixture_id = int(state.get("fixture_id", 0) or 0)
+                            if fixture_id not in self._tracked_fixture_ids:
+                                continue
+                            self.journal.event("sports_state", summarize_state(state))
+
                 snapshot_age_sec = max(0.0, float(now - float(snap.ts)))
                 monitor: Dict[str, Any] = {}
                 feed_monitor = getattr(feed, "monitoring_state", None)
@@ -206,6 +225,13 @@ class TradingBot:
                 per_min_den = max(observer_uptime_sec / 60.0, 1e-9)
                 message_rate_per_min = float(message_count) / per_min_den
                 snapshot_rate_per_min = float(snapshot_count) / per_min_den
+                tracked_soccer_fixtures = 0
+                if self._tracked_fixture_ids:
+                    tracked_soccer_fixtures = sum(
+                        1
+                        for row in self.soccer_state.get_all_states()
+                        if int(row.get("fixture_id", 0) or 0) in self._tracked_fixture_ids
+                    )
 
                 if (now - last_heartbeat_wallclock) >= heartbeat_sec:
                     last_snapshot_age = 0.0
@@ -229,6 +255,7 @@ class TradingBot:
                             "observer_uptime_sec": float(observer_uptime_sec),
                             "message_rate_per_min": float(message_rate_per_min),
                             "snapshot_rate_per_min": float(snapshot_rate_per_min),
+                            "tracked_soccer_fixtures": int(tracked_soccer_fixtures),
                         },
                     )
                     last_heartbeat_wallclock = now
