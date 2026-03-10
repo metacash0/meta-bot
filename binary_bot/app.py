@@ -136,8 +136,14 @@ class TradingBot:
                 reconnect_count = int(monitor.get("reconnect_count", 0) or 0)
                 last_message_wallclock = monitor.get("last_message_wallclock")
                 last_snapshot_feed_wallclock = monitor.get("last_snapshot_wallclock")
+                message_count = int(monitor.get("message_count", 0) or 0)
+                snapshot_count = int(monitor.get("snapshot_count", 0) or 0)
+                started_wallclock = monitor.get("started_wallclock")
                 last_message_age_sec = 0.0
                 last_snapshot_wallclock_age_sec = 0.0
+                observer_uptime_sec = 0.0
+                message_rate_per_min = 0.0
+                snapshot_rate_per_min = 0.0
                 if last_message_wallclock is not None:
                     try:
                         last_message_age_sec = max(0.0, float(now - float(last_message_wallclock)))
@@ -150,6 +156,15 @@ class TradingBot:
                         )
                     except (TypeError, ValueError):
                         last_snapshot_wallclock_age_sec = 0.0
+                if started_wallclock is not None:
+                    try:
+                        observer_uptime_sec = max(0.0, float(now - float(started_wallclock)))
+                    except (TypeError, ValueError):
+                        observer_uptime_sec = 0.0
+
+                per_min_den = max(observer_uptime_sec / 60.0, 1e-9)
+                message_rate_per_min = float(message_count) / per_min_den
+                snapshot_rate_per_min = float(snapshot_count) / per_min_den
 
                 if (now - last_heartbeat_wallclock) >= heartbeat_sec:
                     last_snapshot_age = 0.0
@@ -168,6 +183,11 @@ class TradingBot:
                             "reconnect_count": int(reconnect_count),
                             "last_message_age_sec": float(last_message_age_sec),
                             "last_snapshot_wallclock_age_sec": float(last_snapshot_wallclock_age_sec),
+                            "message_count": int(message_count),
+                            "snapshot_count": int(snapshot_count),
+                            "observer_uptime_sec": float(observer_uptime_sec),
+                            "message_rate_per_min": float(message_rate_per_min),
+                            "snapshot_rate_per_min": float(snapshot_rate_per_min),
                         },
                     )
                     last_heartbeat_wallclock = now

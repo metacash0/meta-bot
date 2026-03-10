@@ -397,6 +397,13 @@ class MockDataFeed:
         self.base_spread = float(base_spread)
         self.tick_interval_sec = float(tick_interval_sec)
         self.total_ticks = int(total_ticks)
+        self.reconnect_count = 0
+        self.last_message_wallclock: Optional[float] = None
+        self.last_snapshot_wallclock: Optional[float] = None
+        self.last_snapshot_ts: Optional[float] = None
+        self.message_count = 0
+        self.snapshot_count = 0
+        self.started_wallclock = float(time.time())
 
     def snapshots(self) -> Iterator[MarketSnapshot]:
         for t in range(self.total_ticks):
@@ -434,6 +441,9 @@ class MockDataFeed:
             "last_message_wallclock": None,
             "last_snapshot_wallclock": None,
             "last_snapshot_ts": None,
+            "message_count": 0,
+            "snapshot_count": 0,
+            "started_wallclock": self.started_wallclock,
         }
 
 
@@ -466,6 +476,9 @@ class PolymarketLiveDataFeed:
         self.last_snapshot_ts: Optional[float] = None
         self.last_message_wallclock: Optional[float] = None
         self.last_snapshot_wallclock: Optional[float] = None
+        self.message_count = 0
+        self.snapshot_count = 0
+        self.started_wallclock = float(time.time())
 
         self.asset_ids = discover_polymarket_asset_ids(
             gamma_url=self.gamma_url,
@@ -510,6 +523,7 @@ class PolymarketLiveDataFeed:
                 raw = ws.recv()
                 if raw is None:
                     continue
+                self.message_count += 1
                 self.last_message_wallclock = float(time.time())
 
                 if isinstance(raw, bytes):
@@ -543,6 +557,7 @@ class PolymarketLiveDataFeed:
                     snapshot = _normalize_message_to_snapshot(message, default_market_id="polymarket")
                     if snapshot is not None:
                         receive_wallclock = float(time.time())
+                        self.snapshot_count += 1
                         self.last_snapshot_wallclock = receive_wallclock
                         self.last_snapshot_ts = float(snapshot.ts)
                         if self.debug_raw and normalized_logged < self.debug_raw_limit:
@@ -583,6 +598,9 @@ class PolymarketLiveDataFeed:
             "last_message_wallclock": self.last_message_wallclock,
             "last_snapshot_wallclock": self.last_snapshot_wallclock,
             "last_snapshot_ts": self.last_snapshot_ts,
+            "message_count": int(self.message_count),
+            "snapshot_count": int(self.snapshot_count),
+            "started_wallclock": self.started_wallclock,
         }
 
 

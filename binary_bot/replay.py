@@ -217,6 +217,11 @@ def summarize_heartbeat_monitoring(events: List[Dict[str, Any]]) -> Dict[str, fl
             "latest_heartbeat_snapshot_age_sec": 0.0,
             "latest_message_age_sec": 0.0,
             "latest_snapshot_wallclock_age_sec": 0.0,
+            "latest_observer_uptime_sec": 0.0,
+            "latest_message_count": 0.0,
+            "latest_snapshot_count": 0.0,
+            "latest_message_rate_per_min": 0.0,
+            "latest_snapshot_rate_per_min": 0.0,
         }
 
     max_reconnect = 0
@@ -235,6 +240,11 @@ def summarize_heartbeat_monitoring(events: List[Dict[str, Any]]) -> Dict[str, fl
         "latest_snapshot_wallclock_age_sec": float(
             latest_payload.get("last_snapshot_wallclock_age_sec", 0.0) or 0.0
         ),
+        "latest_observer_uptime_sec": float(latest_payload.get("observer_uptime_sec", 0.0) or 0.0),
+        "latest_message_count": float(latest_payload.get("message_count", 0.0) or 0.0),
+        "latest_snapshot_count": float(latest_payload.get("snapshot_count", 0.0) or 0.0),
+        "latest_message_rate_per_min": float(latest_payload.get("message_rate_per_min", 0.0) or 0.0),
+        "latest_snapshot_rate_per_min": float(latest_payload.get("snapshot_rate_per_min", 0.0) or 0.0),
     }
 
 
@@ -296,6 +306,11 @@ def main() -> None:
     print(
         f"  Latest snapshot wallclock age sec: {heartbeat_monitoring['latest_snapshot_wallclock_age_sec']:.2f}"
     )
+    print(f"  Latest observer uptime sec: {heartbeat_monitoring['latest_observer_uptime_sec']:.2f}")
+    print(f"  Latest message count: {int(heartbeat_monitoring['latest_message_count'])}")
+    print(f"  Latest snapshot count: {int(heartbeat_monitoring['latest_snapshot_count'])}")
+    print(f"  Latest message rate per min: {heartbeat_monitoring['latest_message_rate_per_min']:.2f}")
+    print(f"  Latest snapshot rate per min: {heartbeat_monitoring['latest_snapshot_rate_per_min']:.2f}")
     print(f"  Avg snapshot gap sec: {snap_monitoring['avg_snapshot_gap_sec']:.2f}")
     print(f"  Max snapshot gap sec: {snap_monitoring['max_snapshot_gap_sec']:.2f}")
     print(f"  P50 snapshot gap sec: {snap_monitoring['p50_snapshot_gap_sec']:.2f}")
