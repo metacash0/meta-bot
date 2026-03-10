@@ -208,6 +208,23 @@ def _extract_timestamp(payload: Dict[str, Any]) -> float:
     return float(time.time())
 
 
+def _extract_event_type(payload: Dict[str, Any]) -> str:
+    top_level = payload.get("event_type")
+    if isinstance(top_level, str):
+        return top_level
+
+    for candidate in _iter_candidate_payloads(payload):
+        value = candidate.get("event_type")
+        if isinstance(value, str):
+            return value
+
+    return ""
+
+
+def _is_best_bid_ask_event(payload: Dict[str, Any]) -> bool:
+    return _extract_event_type(payload) == "best_bid_ask"
+
+
 def _normalize_message_to_snapshot(payload: Dict[str, Any], default_market_id: str) -> Optional[MarketSnapshot]:
     market_id = _extract_market_id(payload) or default_market_id
 
@@ -506,6 +523,8 @@ class PolymarketLiveDataFeed:
                     messages = [m for m in payload if isinstance(m, dict)]
 
                 for message in messages:
+                    if not _is_best_bid_ask_event(message):
+                        continue
                     snapshot = _normalize_message_to_snapshot(message, default_market_id="polymarket")
                     if snapshot is not None:
                         if self.debug_raw and normalized_logged < self.debug_raw_limit:
