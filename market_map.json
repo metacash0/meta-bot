@@ -1,14 +1,15 @@
 {
   "markets": [
     {
-      "name": "example_soccer_home_win_market",
-      "fixture_id": 123456,
+      "name": "independiente_union_test",
+      "fixture_id": 1491962,
       "sport": "soccer",
       "market_type": "home_win",
-      "yes_asset_id": "REPLACE_WITH_REAL_YES_ASSET_ID",
-      "no_asset_id": "REPLACE_WITH_REAL_NO_ASSET_ID",
-      "home_team": "Example Home",
-      "away_team": "Example Away"
+      "yes_asset_id": "REPLACE_OR_REAL_YES_ASSET_ID",
+      "no_asset_id": "REPLACE_OR_REAL_NO_ASSET_ID",
+      "home_team": "Independiente",
+      "away_team": "Union Santa Fe",
+      "prematch_home_win_prob": 0.45
     }
   ]
 }

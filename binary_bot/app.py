@@ -8,6 +8,7 @@ from binary_bot.datafeed import get_default_feed
 from binary_bot.journal import Journal
 from binary_bot.oms import PaperOMS
 from binary_bot.risk import RiskManager
+from binary_bot.sports_model import find_market_config_for_asset, market_fair_probability_from_state
 from binary_bot.sports_state import SoccerStateStore, summarize_state
 from binary_bot.sportsfeed import SoccerSportsFeed, get_tracked_fixture_ids_from_market_map
 from binary_bot.state import BotState
@@ -56,11 +57,50 @@ class TradingBot:
         self.oms.cancel_stale_orders(self.state)
         equity = self.oms.mark_to_market(self.state, snap)
 
+        sports_fair: Optional[float] = None
+        market_cfg = find_market_config_for_asset(str(snap.market_id))
+        if isinstance(market_cfg, dict):
+            try:
+                fixture_id = int(market_cfg.get("fixture_id", 0) or 0)
+            except (TypeError, ValueError):
+                fixture_id = 0
+            fixture_state = self.soccer_state.get_fixture_state(fixture_id) if fixture_id > 0 else None
+            if isinstance(fixture_state, dict):
+                try:
+                    sports_fair = market_fair_probability_from_state(
+                        market_type=str(market_cfg.get("market_type", "")),
+                        state=fixture_state,
+                        prematch_home_win_prob=float(market_cfg.get("prematch_home_win_prob", 0.45)),
+                    )
+                except Exception:
+                    sports_fair = None
+
+                if sports_fair is not None:
+                    self.journal.event(
+                        "sports_fair_value",
+                        {
+                            "ts": float(snap.ts),
+                            "market_id": str(snap.market_id),
+                            "fixture_id": int(fixture_state.get("fixture_id", 0) or 0),
+                            "market_type": str(market_cfg.get("market_type", "")),
+                            "sports_fair": float(sports_fair),
+                            "prematch_home_win_prob": float(market_cfg.get("prematch_home_win_prob", 0.45)),
+                            "minute": int(fixture_state.get("minute", 0) or 0),
+                            "score_home": int(fixture_state.get("score_home", 0) or 0),
+                            "score_away": int(fixture_state.get("score_away", 0) or 0),
+                            "red_home": int(fixture_state.get("red_home", 0) or 0),
+                            "red_away": int(fixture_state.get("red_away", 0) or 0),
+                            "home_team": str(fixture_state.get("home_team", "") or ""),
+                            "away_team": str(fixture_state.get("away_team", "") or ""),
+                        },
+                    )
+
         signal, meta = self.strategy.decide(
             snap=snap,
             bankroll=float(self.state.bankroll),
             p_base=p_base,
             observations=observations,
+            sports_fair=sports_fair,
         )
 
         self.journal.event(
@@ -110,6 +150,8 @@ class TradingBot:
                     "stake_scaled": float(meta.get("stake_scaled", 0.0)),
                     "min_edge": float(meta.get("min_edge", self.strategy.min_edge)),
                     "min_ev_per_dollar": float(meta.get("min_ev_per_dollar", self.strategy.min_ev_per_dollar)),
+                    "sports_fair": float(meta.get("sports_fair", 0.0)),
+                    "fair_source": str(meta.get("fair_source", "market_mid")),
                 },
             )
 

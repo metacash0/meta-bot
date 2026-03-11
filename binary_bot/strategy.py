@@ -92,12 +92,19 @@ class Strategy:
         bankroll: float,
         p_base: Optional[float] = None,
         observations: Optional[Dict[str, Dict]] = None,
+        sports_fair: Optional[float] = None,
     ) -> tuple[Signal, Dict[str, float | str]]:
+        fair_source = "market_mid"
+        fair_input = p_base
+        if sports_fair is not None:
+            fair_input = float(sports_fair)
+            fair_source = "sports_model"
+
         feats = self.features.compute(snap)
         p_fair, p_exec, ci = self.prob.fair_value(
             snap=snap,
             feats=feats,
-            p_base=p_base,
+            p_base=fair_input,
             observations=observations,
         )
 
@@ -128,6 +135,8 @@ class Strategy:
             "stake_scaled": 0.0,
             "min_edge": float(self.min_edge),
             "min_ev_per_dollar": float(self.min_ev_per_dollar),
+            "sports_fair": float(sports_fair) if sports_fair is not None else 0.0,
+            "fair_source": fair_source,
             "action": "",
             "reason": "",
         }

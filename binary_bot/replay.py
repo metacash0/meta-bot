@@ -263,10 +263,12 @@ def summarize_candidate_trades(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             "avg_ev_req": 0.0,
             "avg_stake_base": 0.0,
             "avg_stake_scaled": 0.0,
+            "fair_source_counts": Counter(),
         }
 
     reason_counts = Counter()
     action_reason_counts = Counter()
+    fair_source_counts = Counter()
     buy_count = 0
     sell_count = 0
 
@@ -287,8 +289,10 @@ def summarize_candidate_trades(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         payload = row.get("payload", {})
         action = str(payload.get("action", ""))
         reason = str(payload.get("reason", "unknown"))
+        fair_source = str(payload.get("fair_source", "market_mid"))
         reason_counts[reason] += 1
         action_reason_counts["%s/%s" % (action, reason)] += 1
+        fair_source_counts[fair_source] += 1
 
         if action == "BUY":
             buy_count += 1
@@ -319,6 +323,7 @@ def summarize_candidate_trades(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_ev_req": _avg(ev_req_vals),
         "avg_stake_base": _avg(stake_base_vals),
         "avg_stake_scaled": _avg(stake_scaled_vals),
+        "fair_source_counts": fair_source_counts,
     }
 
 
@@ -440,6 +445,88 @@ def summarize_sports_state_events(events: List[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+def summarize_sports_fair_value_events(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    rows = [row for row in events if row.get("event_type") == "sports_fair_value"]
+    if not rows:
+        return {
+            "count": 0,
+            "unique_markets": 0,
+            "avg_sports_fair": 0.0,
+            "markets": [],
+        }
+
+    by_market: Dict[str, Dict[str, Any]] = {}
+    fair_values: List[float] = []
+
+    for row in rows:
+        payload = row.get("payload", {})
+        if not isinstance(payload, dict):
+            continue
+
+        market_id = str(payload.get("market_id", "unknown"))
+        if market_id not in by_market:
+            by_market[market_id] = {
+                "market_id": market_id,
+                "count": 0,
+                "fixture_id": 0,
+                "market_type": "",
+                "sports_fair_vals": [],
+                "minute": 0,
+                "score_home": 0,
+                "score_away": 0,
+                "home_team": "",
+                "away_team": "",
+            }
+
+        agg = by_market[market_id]
+        agg["count"] += 1
+        try:
+            fair = float(payload.get("sports_fair", 0.0))
+            agg["sports_fair_vals"].append(fair)
+            fair_values.append(fair)
+        except (TypeError, ValueError):
+            pass
+
+        try:
+            agg["fixture_id"] = int(payload.get("fixture_id", 0) or 0)
+        except (TypeError, ValueError):
+            agg["fixture_id"] = 0
+        agg["market_type"] = str(payload.get("market_type", "") or "")
+        try:
+            agg["minute"] = int(payload.get("minute", 0) or 0)
+            agg["score_home"] = int(payload.get("score_home", 0) or 0)
+            agg["score_away"] = int(payload.get("score_away", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+        agg["home_team"] = str(payload.get("home_team", "") or "")
+        agg["away_team"] = str(payload.get("away_team", "") or "")
+
+    markets: List[Dict[str, Any]] = []
+    for market_id, agg in by_market.items():
+        vals = agg["sports_fair_vals"]
+        markets.append(
+            {
+                "market_id": market_id,
+                "count": int(agg["count"]),
+                "fixture_id": int(agg["fixture_id"]),
+                "market_type": str(agg["market_type"]),
+                "avg_sports_fair": float(sum(vals) / len(vals)) if vals else 0.0,
+                "latest_minute": int(agg["minute"]),
+                "latest_score_home": int(agg["score_home"]),
+                "latest_score_away": int(agg["score_away"]),
+                "home_team": str(agg["home_team"]),
+                "away_team": str(agg["away_team"]),
+            }
+        )
+
+    return {
+        "count": len(rows),
+        "unique_markets": len(markets),
+        "avg_sports_fair": float(sum(fair_values) / len(fair_values)) if fair_values else 0.0,
+        "markets": sorted(markets, key=lambda row: row["count"], reverse=True),
+    }
+
+
 def main() -> None:
     events = read_jsonl(os.path.join(LOG_DIR, "events.jsonl"))
     orders = read_jsonl(os.path.join(LOG_DIR, "orders.jsonl"))
@@ -455,6 +542,7 @@ def main() -> None:
     candidate_summary = summarize_candidate_trades(events)
     candidate_by_market = summarize_candidate_trades_by_market(events)
     sports_state_summary = summarize_sports_state_events(events)
+    sports_fair_summary = summarize_sports_fair_value_events(events)
     canceled_orders = count_canceled_orders(events)
     last_fill = summarize_last_fill(fills)
 
@@ -527,6 +615,10 @@ def main() -> None:
     print(f"  Avg ev_req: {candidate_summary['avg_ev_req']:.4f}")
     print(f"  Avg stake_base: {candidate_summary['avg_stake_base']:.4f}")
     print(f"  Avg stake_scaled: {candidate_summary['avg_stake_scaled']:.4f}")
+    if candidate_summary["fair_source_counts"]:
+        print("  Candidate fair source:")
+        for k, v in sorted(candidate_summary["fair_source_counts"].items()):
+            print(f"    {k}: {v}")
     if candidate_summary["action_reason_counts"]:
         print("  Action/reason:")
         for k, v in sorted(candidate_summary["action_reason_counts"].items()):
@@ -572,6 +664,21 @@ def main() -> None:
                 row["status_short"],
             )
         )
+    print()
+
+    print("Sports Fair Value")
+    print(f"  Total events: {sports_fair_summary['count']}")
+    print(f"  Unique markets: {sports_fair_summary['unique_markets']}")
+    print(f"  Avg sports_fair: {sports_fair_summary['avg_sports_fair']:.4f}")
+    for row in sports_fair_summary["markets"]:
+        print(f"  {row['market_id']}")
+        print(f"    Count: {row['count']}")
+        print(f"    Fixture: {row['fixture_id']}")
+        print(f"    Market type: {row['market_type']}")
+        print(f"    Avg sports_fair: {row['avg_sports_fair']:.4f}")
+        print(f"    Latest minute: {row['latest_minute']}")
+        print(f"    Latest score: {row['latest_score_home']}-{row['latest_score_away']}")
+        print(f"    Match: {row['home_team']} vs {row['away_team']}")
     print()
 
     print("Orders")
