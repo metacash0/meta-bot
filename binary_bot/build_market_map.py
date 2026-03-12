@@ -35,7 +35,7 @@ API_FOOTBALL_LEAGUE_IDS = {
     "Europa League": 3,
 }
 SUFFIX_TOKENS = {"fc", "cf", "afc", "sc", "sk", "cd", "ca", "jk"}
-FIXTURE_CACHE: Dict[Tuple[str, int, int], List[Dict[str, Any]]] = {}
+FIXTURE_CACHE: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
 
 
 def normalize_team_name(name: str) -> str:
@@ -69,8 +69,16 @@ def candidate_seasons_for_match_date(match_date: str) -> List[int]:
     return [dt.year - 1, dt.year]
 
 
-def fetch_fixtures_for_lookup(match_date: str, league_id: int, season: int) -> List[Dict[str, Any]]:
-    cache_key = (match_date, int(league_id), int(season))
+def fixture_date_yyyy_mm_dd(row: Dict[str, Any]) -> str:
+    fixture = row.get("fixture", {})
+    if not isinstance(fixture, dict):
+        return ""
+    raw = str(fixture.get("date", "") or "")
+    return raw[:10] if len(raw) >= 10 else ""
+
+
+def fetch_fixtures_for_lookup(league_id: int, season: int) -> List[Dict[str, Any]]:
+    cache_key = (int(league_id), int(season))
     if cache_key in FIXTURE_CACHE:
         return FIXTURE_CACHE[cache_key]
     if not APIFOOTBALL_API_KEY:
@@ -78,7 +86,7 @@ def fetch_fixtures_for_lookup(match_date: str, league_id: int, season: int) -> L
 
     url = f"{APIFOOTBALL_BASE_URL}/fixtures"
     headers = {"x-apisports-key": APIFOOTBALL_API_KEY}
-    params = {"date": match_date, "league": int(league_id), "season": int(season)}
+    params = {"league": int(league_id), "season": int(season)}
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10.0)
@@ -103,7 +111,9 @@ def collect_fixtures_for_candidate(match_date: str, league_name: str) -> Tuple[L
 
     rows: List[Dict[str, Any]] = []
     for season in seasons:
-        rows.extend(fetch_fixtures_for_lookup(match_date, league_id, season))
+        for row in fetch_fixtures_for_lookup(league_id, season):
+            if fixture_date_yyyy_mm_dd(row) == match_date:
+                rows.append(row)
     return rows, seasons, league_id
 
 
