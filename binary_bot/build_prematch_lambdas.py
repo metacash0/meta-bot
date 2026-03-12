@@ -40,7 +40,6 @@ TEAM_ALIASES = {
     "club atletico de madrid": "atletico madrid",
     "atletico madrid": "atletico madrid",
     "borussia monchengladbach": "monchengladbach",
-    "borussia m nchengladbach": "monchengladbach",
     "monchengladbach": "monchengladbach",
     "fc st pauli 1910": "st pauli",
     "st pauli": "st pauli",
@@ -95,7 +94,8 @@ TEAM_ALIASES = {
     "sporting": "sporting cp",
     "fk bodo glimt": "bodo glimt",
     "bodo glimt": "bodo glimt",
-    "bodo glimt": "bodo glimt",
+    "bodo/glimt": "bodo glimt",
+    "bodø/glimt": "bodo glimt",
 }
 
 
@@ -139,16 +139,14 @@ def read_sportsbook_consensus() -> List[Dict[str, Any]]:
 
 
 def normalize_team_name(name: str) -> str:
-    def strip_accents(text: str) -> str:
-        return "".join(
-            c for c in unicodedata.normalize("NFD", text)
-            if unicodedata.category(c) != "Mn"
-        )
-
-    text = strip_accents(str(name or ""))
+    text = str(name or "")
+    text = "".join(
+        c for c in unicodedata.normalize("NFD", text)
+        if unicodedata.category(c) != "Mn"
+    )
     text = text.lower()
     text = text.replace("&", " and ")
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"[^a-z0-9\s/]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     parts = [part for part in text.split() if part]
     while parts and parts[-1] in {"fc", "cf", "afc", "sc"}:
