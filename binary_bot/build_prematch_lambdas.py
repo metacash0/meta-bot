@@ -13,6 +13,7 @@ from shared.poisson_totals import infer_lambda_total
 
 MARKET_MAP_PATH = "data/market_map.json"
 CONSENSUS_PATH = "data/sportsbook_consensus.json"
+FIXTURE_MAPPING_INDEX_PATH = "data/fixture_mapping_index.json"
 OUTPUT_PATH = "data/prematch_lambdas.json"
 LEAGUE_TO_SPORT_KEY = {
     "Premier League": "soccer_epl",
@@ -138,6 +139,22 @@ def read_sportsbook_consensus() -> List[Dict[str, Any]]:
     return [row for row in fixtures if isinstance(row, dict)]
 
 
+def read_fixture_mapping_index() -> List[Dict[str, Any]]:
+    if not os.path.exists(FIXTURE_MAPPING_INDEX_PATH):
+        return []
+
+    try:
+        with open(FIXTURE_MAPPING_INDEX_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return []
+
+    fixtures = payload.get("fixtures", []) if isinstance(payload, dict) else []
+    if not isinstance(fixtures, list):
+        return []
+    return [row for row in fixtures if isinstance(row, dict)]
+
+
 def normalize_team_name(name: str) -> str:
     text = str(name or "")
     text = text.replace("ø", "o").replace("Ø", "O")
@@ -159,6 +176,33 @@ def normalize_team_name(name: str) -> str:
 def canonical_team_name(name: str) -> str:
     normalized = normalize_team_name(name)
     return TEAM_ALIASES.get(normalized, normalized)
+
+
+def find_mapping_row(fixture_id: int, rows: list[dict]) -> dict | None:
+    try:
+        fixture_id = int(fixture_id)
+    except (TypeError, ValueError):
+        return None
+
+    for row in rows:
+        try:
+            row_fixture_id = int(row.get("fixture_id"))
+        except (TypeError, ValueError):
+            continue
+        if row_fixture_id == fixture_id:
+            return row
+    return None
+
+
+def find_consensus_row_by_source_fixture_id(source_fixture_id: str, rows: list[dict]) -> dict | None:
+    target = str(source_fixture_id or "").strip()
+    if not target:
+        return None
+
+    for row in rows:
+        if str(row.get("source_fixture_id", "") or "").strip() == target:
+            return row
+    return None
 
 
 def find_consensus_row(league: str, home_team: str, away_team: str, rows: list[dict]) -> dict | None:
@@ -198,6 +242,7 @@ def find_consensus_row(league: str, home_team: str, away_team: str, rows: list[d
 def main() -> None:
     markets = read_market_map()
     consensus_rows = read_sportsbook_consensus()
+    mapping_rows = read_fixture_mapping_index()
     if not markets or not consensus_rows:
         if not markets:
             print("market map missing or unreadable at data/market_map.json; wrote empty prematch_lambdas.json")
@@ -214,6 +259,8 @@ def main() -> None:
     output_rows: List[Dict[str, Any]] = []
     counts_by_league: Counter = Counter()
     unmatched: List[Dict[str, str]] = []
+    direct_mapping_matches = 0
+    fuzzy_fallback_matches = 0
 
     for market in markets:
         fixture_id = market.get("fixture_id")
@@ -227,12 +274,26 @@ def main() -> None:
         home_team = str(market.get("home_team", "") or "")
         away_team = str(market.get("away_team", "") or "")
 
-        consensus = find_consensus_row(
-            league=league,
-            home_team=home_team,
-            away_team=away_team,
-            rows=consensus_rows,
-        )
+        consensus = None
+        mapping_row = find_mapping_row(fixture_id, mapping_rows)
+        if mapping_row is not None:
+            consensus = find_consensus_row_by_source_fixture_id(
+                str(mapping_row.get("source_fixture_id", "") or ""),
+                consensus_rows,
+            )
+            if consensus is not None:
+                direct_mapping_matches += 1
+
+        if consensus is None:
+            consensus = find_consensus_row(
+                league=league,
+                home_team=home_team,
+                away_team=away_team,
+                rows=consensus_rows,
+            )
+            if consensus is not None:
+                fuzzy_fallback_matches += 1
+
         if consensus is None:
             unmatched.append(
                 {
@@ -292,6 +353,9 @@ def main() -> None:
             print("%s | %s vs %s" % (row["league"], row["home_team"], row["away_team"]))
     print("total fixtures read: %d" % len(markets))
     print("total consensus rows available: %d" % len(consensus_rows))
+    print("total mapping rows available: %d" % len(mapping_rows))
+    print("mappings used directly: %d" % direct_mapping_matches)
+    print("fuzzy matches used as fallback: %d" % fuzzy_fallback_matches)
     print("total lambda rows written: %d" % len(output_rows))
     print("total unmatched fixtures: %d" % len(unmatched))
     print("counts by league: %s" % json.dumps(dict(counts_by_league), sort_keys=True))
