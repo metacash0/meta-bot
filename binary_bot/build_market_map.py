@@ -86,58 +86,50 @@ def fetch_fixtures_for_lookup(league_id: int, season: int) -> List[Dict[str, Any
 
     url = f"{APIFOOTBALL_BASE_URL}/fixtures"
     headers = {"x-apisports-key": APIFOOTBALL_API_KEY}
+    params = {"league": int(league_id), "season": int(season)}
+
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=10.0)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception:
+        FIXTURE_CACHE[cache_key] = []
+        return []
+
+    rows = payload.get("response", []) if isinstance(payload, dict) else []
     normalized_rows: List[Dict[str, Any]] = []
-    page = 1
-
-    while True:
-        params = {"league": int(league_id), "season": int(season), "page": int(page)}
-
-        try:
-            response = requests.get(url, headers=headers, params=params, timeout=10.0)
-            response.raise_for_status()
-            payload = response.json()
-        except Exception:
-            break
-
-        rows = payload.get("response", []) if isinstance(payload, dict) else []
-        if isinstance(rows, list):
-            normalized_rows.extend(row for row in rows if isinstance(row, dict))
-
-        paging = payload.get("paging", {}) if isinstance(payload, dict) else {}
-        try:
-            current_page = int(paging.get("current", page) or page)
-        except (TypeError, ValueError):
-            current_page = page
-        try:
-            total_pages = int(paging.get("total", current_page) or current_page)
-        except (TypeError, ValueError):
-            total_pages = current_page
-
-        if current_page >= total_pages:
-            break
-        page = current_page + 1
+    if isinstance(rows, list):
+        normalized_rows = [row for row in rows if isinstance(row, dict)]
 
     FIXTURE_CACHE[cache_key] = normalized_rows
     return normalized_rows
 
 
-def collect_fixtures_for_candidate(match_date: str, league_name: str) -> Tuple[List[Dict[str, Any]], List[int], int]:
+def collect_fixtures_for_candidate(
+    match_date: str,
+    league_name: str,
+) -> Tuple[List[Dict[str, Any]], List[int], int, int]:
     league_id = int(API_FOOTBALL_LEAGUE_IDS.get(league_name, 0) or 0)
     seasons = candidate_seasons_for_match_date(match_date)
     if not match_date or league_id <= 0 or not seasons:
-        return [], seasons, league_id
+        return [], seasons, league_id, 0
+
+    season_rows: List[Dict[str, Any]] = []
+    for season in seasons:
+        fetched_rows = fetch_fixtures_for_lookup(league_id, season)
+        if fetched_rows:
+            season_rows.extend(fetched_rows)
 
     rows: List[Dict[str, Any]] = []
-    for season in seasons:
-        for row in fetch_fixtures_for_lookup(league_id, season):
-            if fixture_date_yyyy_mm_dd(row) == match_date:
-                rows.append(row)
-    return rows, seasons, league_id
+    for row in season_rows:
+        if fixture_date_yyyy_mm_dd(row) == match_date:
+            rows.append(row)
+    return rows, seasons, league_id, len(season_rows)
 
 
-def extract_fixture_debug_rows(match_date: str, league_name: str) -> Tuple[List[Dict[str, Any]], List[int], int]:
+def extract_fixture_debug_rows(match_date: str, league_name: str) -> Tuple[List[Dict[str, Any]], List[int], int, int]:
     out: List[Dict[str, Any]] = []
-    raw_rows, seasons, league_id = collect_fixtures_for_candidate(match_date, league_name)
+    raw_rows, seasons, league_id, total_rows = collect_fixtures_for_candidate(match_date, league_name)
     for row in raw_rows:
         fixture = row.get("fixture", {})
         league = row.get("league", {})
@@ -161,7 +153,7 @@ def extract_fixture_debug_rows(match_date: str, league_name: str) -> Tuple[List[
                 "away_team": str(away.get("name", "") or ""),
             }
         )
-    return out, seasons, league_id
+    return out, seasons, league_id, total_rows
 
 
 def find_matching_fixture(home_team: str, away_team: str, match_date: str, league_name: str) -> Optional[Dict[str, Any]]:
@@ -171,7 +163,7 @@ def find_matching_fixture(home_team: str, away_team: str, match_date: str, leagu
         return None
 
     strong_match: Optional[Dict[str, Any]] = None
-    raw_rows, _, _ = collect_fixtures_for_candidate(match_date, league_name)
+    raw_rows, _, _, _ = collect_fixtures_for_candidate(match_date, league_name)
     for row in raw_rows:
         teams = row.get("teams", {})
         if not isinstance(teams, dict):
@@ -379,8 +371,13 @@ def main() -> None:
                     item["match_date"],
                 )
             )
-            debug_rows, seasons, league_id = extract_fixture_debug_rows(item["match_date"], item["league_name"])
-            print("API lookup: league_id=%s seasons=%s" % (league_id, seasons))
+            debug_rows, seasons, league_id, total_rows = extract_fixture_debug_rows(
+                item["match_date"], item["league_name"]
+            )
+            print(
+                "API lookup: league_id=%s seasons=%s total_rows=%s filtered_rows=%s"
+                % (league_id, seasons, total_rows, len(debug_rows))
+            )
             print("API-Football candidate fixtures:")
             for fixture_row in debug_rows[:5]:
                 print(
