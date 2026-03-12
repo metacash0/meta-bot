@@ -140,6 +140,8 @@ def read_sportsbook_consensus() -> List[Dict[str, Any]]:
 
 def normalize_team_name(name: str) -> str:
     text = str(name or "")
+    text = text.replace("ø", "o").replace("Ø", "O")
+    text = text.replace("/", " ")
     text = "".join(
         c for c in unicodedata.normalize("NFD", text)
         if unicodedata.category(c) != "Mn"
