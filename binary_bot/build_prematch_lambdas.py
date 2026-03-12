@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from collections import Counter
 from typing import Any, Dict, List
 
@@ -20,6 +21,47 @@ LEAGUE_TO_SPORT_KEY = {
     "Bundesliga": "soccer_germany_bundesliga",
     "Ligue 1": "soccer_france_ligue_one",
     "Champions League": "soccer_uefa_champs_league",
+}
+TEAM_ALIASES = {
+    "sunderland afc": "sunderland",
+    "sunderland": "sunderland",
+    "brighton and hove albion": "brighton",
+    "brighton": "brighton",
+    "newcastle united": "newcastle",
+    "newcastle": "newcastle",
+    "west ham united": "west ham",
+    "west ham": "west ham",
+    "leeds united": "leeds",
+    "leeds": "leeds",
+    "tottenham hotspur": "tottenham",
+    "tottenham": "tottenham",
+    "deportivo alaves": "alaves",
+    "alaves": "alaves",
+    "club atletico de madrid": "atletico madrid",
+    "atletico madrid": "atletico madrid",
+    "borussia monchengladbach": "monchengladbach",
+    "borussia m nchengladbach": "monchengladbach",
+    "monchengladbach": "monchengladbach",
+    "fc st pauli 1910": "st pauli",
+    "st pauli": "st pauli",
+    "tsg 1899 hoffenheim": "hoffenheim",
+    "1899 hoffenheim": "hoffenheim",
+    "hoffenheim": "hoffenheim",
+    "vfl wolfsburg": "wolfsburg",
+    "wolfsburg": "wolfsburg",
+    "athletic club": "athletic club",
+    "girona fc": "girona",
+    "girona": "girona",
+    "villarreal cf": "villarreal",
+    "villarreal": "villarreal",
+    "getafe cf": "getafe",
+    "getafe": "getafe",
+    "crystal palace fc": "crystal palace",
+    "crystal palace": "crystal palace",
+    "liverpool fc": "liverpool",
+    "liverpool": "liverpool",
+    "manchester city fc": "manchester city",
+    "manchester city": "manchester city",
 }
 
 
@@ -63,24 +105,32 @@ def read_sportsbook_consensus() -> List[Dict[str, Any]]:
 
 
 def normalize_team_name(name: str) -> str:
-    text = str(name or "").lower()
+    text = unicodedata.normalize("NFKD", str(name or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.lower()
     text = text.replace("&", " and ")
     text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     parts = [part for part in text.split() if part]
     while parts and parts[-1] in {"fc", "cf", "afc", "sc"}:
         parts.pop()
     return " ".join(parts)
 
 
+def canonical_team_name(name: str) -> str:
+    normalized = normalize_team_name(name)
+    return TEAM_ALIASES.get(normalized, normalized)
+
+
 def find_consensus_row(league: str, home_team: str, away_team: str, rows: list[dict]) -> dict | None:
-    target_home = normalize_team_name(home_team)
-    target_away = normalize_team_name(away_team)
+    target_home = canonical_team_name(home_team)
+    target_away = canonical_team_name(away_team)
     target_sport_key = LEAGUE_TO_SPORT_KEY.get(str(league or ""))
 
     fallback_match = None
     for row in rows:
-        row_home = normalize_team_name(str(row.get("home_team", "") or ""))
-        row_away = normalize_team_name(str(row.get("away_team", "") or ""))
+        row_home = canonical_team_name(str(row.get("home_team", "") or ""))
+        row_away = canonical_team_name(str(row.get("away_team", "") or ""))
         if row_home != target_home or row_away != target_away:
             continue
 
