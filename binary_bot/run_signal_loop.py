@@ -84,12 +84,11 @@ def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) ->
 
 def run_loop() -> None:
     while True:
-        loop_timestamp = datetime.now(timezone.utc).isoformat()
         mapping_rows = read_fixture_mapping_index()
         market_rows = read_market_map()
 
-        scanned = 0
-        signaled = 0
+        fixtures_scanned = 0
+        signals_found = 0
 
         for mapping_row in mapping_rows:
             try:
@@ -106,26 +105,30 @@ def run_loop() -> None:
             except Exception:
                 continue
 
-            scanned += 1
+            fixtures_scanned += 1
             if signal_row.get("action") != "HOLD":
-                signaled += 1
-            print(json.dumps(signal_row, sort_keys=True))
+                print(json.dumps(signal_row, sort_keys=True))
+                signals_found += 1
 
         print(
             json.dumps(
                 {
-                    "timestamp": loop_timestamp,
-                    "fixtures_scanned": scanned,
-                    "signals_triggered": signaled,
+                    "scan_complete": True,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "fixtures_scanned": fixtures_scanned,
+                    "signals_found": signals_found,
                 },
                 sort_keys=True,
             )
         )
-        time.sleep(SCAN_SLEEP_SEC)
+        time.sleep(10)
 
 
 def main() -> None:
-    run_loop()
+    try:
+        run_loop()
+    except KeyboardInterrupt:
+        print("signal loop stopped")
 
 
 if __name__ == "__main__":
