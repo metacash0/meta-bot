@@ -34,7 +34,27 @@ API_FOOTBALL_LEAGUE_IDS = {
     "Champions League": 2,
     "Europa League": 3,
 }
-SUFFIX_TOKENS = {"fc", "cf", "afc", "sc", "sk", "cd", "ca", "jk"}
+STOP_TOKENS = {
+    "fc",
+    "cf",
+    "afc",
+    "bc",
+    "ac",
+    "ss",
+    "ssc",
+    "us",
+    "club",
+}
+GENERIC_TRAILING_TOKENS = {"united"}
+DESCRIPTIVE_PREFIX_TOKENS = {"deportivo", "olympique"}
+TEAM_ALIASES = {
+    "internazionale milano": "inter",
+    "fc internazionale milano": "inter",
+    "club atletico de madrid": "atletico madrid",
+    "atletico de madrid": "atletico madrid",
+    "olympique de marseille": "marseille",
+    "deportivo alaves": "alaves",
+}
 FIXTURE_CACHE: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
 
 
@@ -44,9 +64,49 @@ def normalize_team_name(name: str) -> str:
     text = text.lower()
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     parts = [part for part in text.split() if part]
-    while parts and parts[-1] in SUFFIX_TOKENS:
+    while parts and re.fullmatch(r"(18|19|20)\d{2}", parts[-1]):
+        parts.pop()
+    parts = [
+        part
+        for part in parts
+        if part not in STOP_TOKENS and part not in DESCRIPTIVE_PREFIX_TOKENS
+    ]
+    normalized = " ".join(parts).strip()
+    normalized = re.sub(r"\s+", " ", normalized)
+    return TEAM_ALIASES.get(normalized, normalized)
+
+
+def _strip_generic_trailing_tokens(name: str) -> str:
+    parts = [part for part in name.split() if part]
+    while parts and parts[-1] in GENERIC_TRAILING_TOKENS:
         parts.pop()
     return " ".join(parts)
+
+
+def team_names_match(a: str, b: str) -> bool:
+    norm_a = normalize_team_name(a)
+    norm_b = normalize_team_name(b)
+    if not norm_a or not norm_b:
+        return False
+    if norm_a == norm_b:
+        return True
+
+    stripped_a = _strip_generic_trailing_tokens(norm_a)
+    stripped_b = _strip_generic_trailing_tokens(norm_b)
+    if stripped_a and stripped_b and stripped_a == stripped_b:
+        return True
+
+    tokens_a = set(stripped_a.split())
+    tokens_b = set(stripped_b.split())
+    if not tokens_a or not tokens_b:
+        return False
+
+    overlap = len(tokens_a & tokens_b)
+    min_len = min(len(tokens_a), len(tokens_b))
+    if min_len <= 3 and overlap >= min_len:
+        return True
+
+    return False
 
 
 def derive_match_key(slug: str) -> str:
@@ -179,7 +239,7 @@ def find_matching_fixture(home_team: str, away_team: str, match_date: str, leagu
 
         api_home_name = str(home.get("name", "") or "")
         api_away_name = str(away.get("name", "") or "")
-        if normalize_team_name(api_home_name) != normalized_home:
+        if not team_names_match(api_home_name, normalized_home):
             continue
 
         fixture_id = fixture.get("id")
@@ -194,7 +254,7 @@ def find_matching_fixture(home_team: str, away_team: str, match_date: str, leagu
             "away_team": api_away_name,
         }
         if normalized_away:
-            if normalize_team_name(api_away_name) == normalized_away:
+            if team_names_match(api_away_name, normalized_away):
                 return candidate
             if strong_match is None:
                 strong_match = candidate
