@@ -86,19 +86,37 @@ def fetch_fixtures_for_lookup(league_id: int, season: int) -> List[Dict[str, Any
 
     url = f"{APIFOOTBALL_BASE_URL}/fixtures"
     headers = {"x-apisports-key": APIFOOTBALL_API_KEY}
-    params = {"league": int(league_id), "season": int(season)}
+    normalized_rows: List[Dict[str, Any]] = []
+    page = 1
 
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=10.0)
-        response.raise_for_status()
-        payload = response.json()
-    except Exception:
-        return []
+    while True:
+        params = {"league": int(league_id), "season": int(season), "page": int(page)}
 
-    rows = payload.get("response", []) if isinstance(payload, dict) else []
-    if not isinstance(rows, list):
-        return []
-    normalized_rows = [row for row in rows if isinstance(row, dict)]
+        try:
+            response = requests.get(url, headers=headers, params=params, timeout=10.0)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception:
+            break
+
+        rows = payload.get("response", []) if isinstance(payload, dict) else []
+        if isinstance(rows, list):
+            normalized_rows.extend(row for row in rows if isinstance(row, dict))
+
+        paging = payload.get("paging", {}) if isinstance(payload, dict) else {}
+        try:
+            current_page = int(paging.get("current", page) or page)
+        except (TypeError, ValueError):
+            current_page = page
+        try:
+            total_pages = int(paging.get("total", current_page) or current_page)
+        except (TypeError, ValueError):
+            total_pages = current_page
+
+        if current_page >= total_pages:
+            break
+        page = current_page + 1
+
     FIXTURE_CACHE[cache_key] = normalized_rows
     return normalized_rows
 
