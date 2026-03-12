@@ -5,6 +5,7 @@ import os
 import re
 import unicodedata
 from collections import Counter
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
@@ -24,8 +25,17 @@ TARGET_LEAGUES = {
     "Champions League",
     "Europa League",
 }
+API_FOOTBALL_LEAGUE_IDS = {
+    "Premier League": 39,
+    "La Liga": 140,
+    "Serie A": 135,
+    "Bundesliga": 78,
+    "Ligue 1": 61,
+    "Champions League": 2,
+    "Europa League": 3,
+}
 SUFFIX_TOKENS = {"fc", "cf", "afc", "sc", "sk", "cd", "ca", "jk"}
-FIXTURE_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+FIXTURE_CACHE: Dict[Tuple[str, int, int], List[Dict[str, Any]]] = {}
 
 
 def normalize_team_name(name: str) -> str:
@@ -49,15 +59,26 @@ def derive_match_key(slug: str) -> str:
     return text
 
 
-def fetch_fixtures_for_date(match_date: str) -> List[Dict[str, Any]]:
-    if match_date in FIXTURE_CACHE:
-        return FIXTURE_CACHE[match_date]
+def candidate_seasons_for_match_date(match_date: str) -> List[int]:
+    try:
+        dt = datetime.strptime(match_date, "%Y-%m-%d")
+    except ValueError:
+        return []
+    if dt.month >= 7:
+        return [dt.year]
+    return [dt.year - 1, dt.year]
+
+
+def fetch_fixtures_for_lookup(match_date: str, league_id: int, season: int) -> List[Dict[str, Any]]:
+    cache_key = (match_date, int(league_id), int(season))
+    if cache_key in FIXTURE_CACHE:
+        return FIXTURE_CACHE[cache_key]
     if not APIFOOTBALL_API_KEY:
         return []
 
     url = f"{APIFOOTBALL_BASE_URL}/fixtures"
     headers = {"x-apisports-key": APIFOOTBALL_API_KEY}
-    params = {"date": match_date}
+    params = {"date": match_date, "league": int(league_id), "season": int(season)}
 
     try:
         response = requests.get(url, headers=headers, params=params, timeout=10.0)
@@ -70,13 +91,26 @@ def fetch_fixtures_for_date(match_date: str) -> List[Dict[str, Any]]:
     if not isinstance(rows, list):
         return []
     normalized_rows = [row for row in rows if isinstance(row, dict)]
-    FIXTURE_CACHE[match_date] = normalized_rows
+    FIXTURE_CACHE[cache_key] = normalized_rows
     return normalized_rows
 
 
-def extract_fixture_debug_rows(match_date: str) -> List[Dict[str, Any]]:
+def collect_fixtures_for_candidate(match_date: str, league_name: str) -> Tuple[List[Dict[str, Any]], List[int], int]:
+    league_id = int(API_FOOTBALL_LEAGUE_IDS.get(league_name, 0) or 0)
+    seasons = candidate_seasons_for_match_date(match_date)
+    if not match_date or league_id <= 0 or not seasons:
+        return [], seasons, league_id
+
+    rows: List[Dict[str, Any]] = []
+    for season in seasons:
+        rows.extend(fetch_fixtures_for_lookup(match_date, league_id, season))
+    return rows, seasons, league_id
+
+
+def extract_fixture_debug_rows(match_date: str, league_name: str) -> Tuple[List[Dict[str, Any]], List[int], int]:
     out: List[Dict[str, Any]] = []
-    for row in fetch_fixtures_for_date(match_date):
+    raw_rows, seasons, league_id = collect_fixtures_for_candidate(match_date, league_name)
+    for row in raw_rows:
         fixture = row.get("fixture", {})
         league = row.get("league", {})
         teams = row.get("teams", {})
@@ -99,17 +133,18 @@ def extract_fixture_debug_rows(match_date: str) -> List[Dict[str, Any]]:
                 "away_team": str(away.get("name", "") or ""),
             }
         )
-    return out
+    return out, seasons, league_id
 
 
-def find_matching_fixture(home_team: str, away_team: str, match_date: str) -> Optional[Dict[str, Any]]:
+def find_matching_fixture(home_team: str, away_team: str, match_date: str, league_name: str) -> Optional[Dict[str, Any]]:
     normalized_home = normalize_team_name(home_team)
     normalized_away = normalize_team_name(away_team)
     if not normalized_home or not match_date:
         return None
 
     strong_match: Optional[Dict[str, Any]] = None
-    for row in fetch_fixtures_for_date(match_date):
+    raw_rows, _, _ = collect_fixtures_for_candidate(match_date, league_name)
+    for row in raw_rows:
         teams = row.get("teams", {})
         if not isinstance(teams, dict):
             continue
@@ -264,6 +299,7 @@ def main() -> None:
             home_team=str(candidate.get("home_team_candidate", "") or ""),
             away_team=str(candidate.get("away_team_candidate", "") or ""),
             match_date=str(candidate.get("match_date", "") or ""),
+            league_name=str(candidate.get("league", "") or ""),
         )
         if fixture is None:
             if len(unmatched) < 20:
@@ -274,6 +310,7 @@ def main() -> None:
                         "home_team": str(candidate.get("home_team_candidate", "") or ""),
                         "away_team": str(candidate.get("away_team_candidate", "") or ""),
                         "match_date": str(candidate.get("match_date", "") or ""),
+                        "league_name": str(candidate.get("league", "") or ""),
                     }
                 )
             continue
@@ -307,15 +344,16 @@ def main() -> None:
             print(
                 "%s | %s | %s | %s | %s"
                 % (
-                    item["league"],
+                    item["league_name"],
                     item["match_key"],
                     item["home_team"],
                     item["away_team"],
                     item["match_date"],
                 )
             )
-            print("API-Football fixtures on %s:" % item["match_date"])
-            debug_rows = extract_fixture_debug_rows(item["match_date"])
+            debug_rows, seasons, league_id = extract_fixture_debug_rows(item["match_date"], item["league_name"])
+            print("API lookup: league_id=%s seasons=%s" % (league_id, seasons))
+            print("API-Football candidate fixtures:")
             for fixture_row in debug_rows[:5]:
                 print(
                     "  %s | %s | %s | %s"
