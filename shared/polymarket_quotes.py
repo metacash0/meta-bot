@@ -42,14 +42,15 @@ def _extract_price_size(level: Any) -> Tuple[float | None, float | None]:
     return None, None
 
 
-def _first_valid_price(levels: Any) -> float | None:
+def _all_valid_prices(levels: Any) -> List[float]:
     if not isinstance(levels, list):
-        return None
+        return []
+    prices: List[float] = []
     for level in levels:
         price, _ = _extract_price_size(level)
         if price is not None:
-            return price
-    return None
+            prices.append(_clamp_price(price))
+    return [price for price in prices if price is not None]
 
 
 def _candidate_payloads(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -87,8 +88,10 @@ def _parse_best_bid_ask(payload: dict) -> tuple[float | None, float | None]:
 
         bids = candidate.get("bids")
         asks = candidate.get("asks")
-        bid = _first_valid_price(bids)
-        ask = _first_valid_price(asks)
+        valid_bids = _all_valid_prices(bids)
+        valid_asks = _all_valid_prices(asks)
+        bid = _clamp_price(max(valid_bids)) if valid_bids else None
+        ask = _clamp_price(min(valid_asks)) if valid_asks else None
         if bid is not None or ask is not None:
             return bid, ask
 
