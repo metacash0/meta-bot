@@ -74,6 +74,7 @@ TEAM_ALIASES = {
     "bayern munich": "bayern munich",
     "fc lorient": "lorient",
     "lorient": "lorient",
+    "rc lens": "lens",
     "racing club de lens": "lens",
     "lens": "lens",
     "as monaco fc": "monaco",
@@ -89,8 +90,10 @@ TEAM_ALIASES = {
     "atalanta bc": "atalanta",
     "atalanta": "atalanta",
     "sporting clube de portugal": "sporting cp",
+    "sporting lisbon": "sporting cp",
     "sporting cp": "sporting cp",
     "sporting": "sporting cp",
+    "fk bodo glimt": "bodo glimt",
     "bodo glimt": "bodo glimt",
     "bodo glimt": "bodo glimt",
 }
@@ -136,8 +139,13 @@ def read_sportsbook_consensus() -> List[Dict[str, Any]]:
 
 
 def normalize_team_name(name: str) -> str:
-    text = unicodedata.normalize("NFKD", str(name or ""))
-    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    def strip_accents(text: str) -> str:
+        return "".join(
+            c for c in unicodedata.normalize("NFD", text)
+            if unicodedata.category(c) != "Mn"
+        )
+
+    text = strip_accents(str(name or ""))
     text = text.lower()
     text = text.replace("&", " and ")
     text = re.sub(r"[^a-z0-9\s]", " ", text)
@@ -159,19 +167,32 @@ def find_consensus_row(league: str, home_team: str, away_team: str, rows: list[d
     target_sport_key = LEAGUE_TO_SPORT_KEY.get(str(league or ""))
 
     fallback_match = None
+    contains_match = None
     for row in rows:
+        row_sport_key = str(row.get("sport_key", "") or "")
+        if target_sport_key and row_sport_key != target_sport_key:
+            continue
+
         row_home = canonical_team_name(str(row.get("home_team", "") or ""))
         row_away = canonical_team_name(str(row.get("away_team", "") or ""))
         if row_home != target_home or row_away != target_away:
+            home_contains = (
+                row_home == target_home
+                or row_home in target_home
+                or target_home in row_home
+            )
+            away_contains = (
+                row_away == target_away
+                or row_away in target_away
+                or target_away in row_away
+            )
+            if home_contains and away_contains and contains_match is None:
+                contains_match = row
             continue
 
-        row_sport_key = str(row.get("sport_key", "") or "")
-        if target_sport_key and row_sport_key == target_sport_key:
-            return row
-        if fallback_match is None:
-            fallback_match = row
+        return row
 
-    return fallback_match
+    return contains_match or fallback_match
 
 
 def main() -> None:
