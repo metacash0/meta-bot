@@ -5,7 +5,7 @@ import os
 import re
 import unicodedata
 from collections import Counter
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
 
@@ -38,6 +38,16 @@ def normalize_team_name(name: str) -> str:
     return " ".join(parts)
 
 
+def derive_match_key(slug: str) -> str:
+    text = str(slug or "").strip()
+    if not text:
+        return ""
+    parts = text.split("-")
+    if len(parts) >= 2:
+        return "-".join(parts[:-1])
+    return text
+
+
 def fetch_fixtures_for_date(match_date: str) -> List[Dict[str, Any]]:
     if not APIFOOTBALL_API_KEY:
         return []
@@ -59,11 +69,13 @@ def fetch_fixtures_for_date(match_date: str) -> List[Dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def find_matching_fixture(home_team: str, match_date: str) -> Optional[Dict[str, Any]]:
+def find_matching_fixture(home_team: str, away_team: str, match_date: str) -> Optional[Dict[str, Any]]:
     normalized_home = normalize_team_name(home_team)
+    normalized_away = normalize_team_name(away_team)
     if not normalized_home or not match_date:
         return None
 
+    strong_match: Optional[Dict[str, Any]] = None
     for row in fetch_fixtures_for_date(match_date):
         teams = row.get("teams", {})
         if not isinstance(teams, dict):
@@ -78,6 +90,7 @@ def find_matching_fixture(home_team: str, match_date: str) -> Optional[Dict[str,
             continue
 
         api_home_name = str(home.get("name", "") or "")
+        api_away_name = str(away.get("name", "") or "")
         if normalize_team_name(api_home_name) != normalized_home:
             continue
 
@@ -87,13 +100,20 @@ def find_matching_fixture(home_team: str, match_date: str) -> Optional[Dict[str,
         except (TypeError, ValueError):
             continue
 
-        return {
+        candidate = {
             "fixture_id": fixture_id,
             "home_team": api_home_name,
-            "away_team": str(away.get("name", "") or ""),
+            "away_team": api_away_name,
         }
+        if normalized_away:
+            if normalize_team_name(api_away_name) == normalized_away:
+                return candidate
+            if strong_match is None:
+                strong_match = candidate
+            continue
+        return candidate
 
-    return None
+    return strong_match
 
 
 def discover_candidate_markets() -> List[Dict[str, str]]:
@@ -102,6 +122,61 @@ def discover_candidate_markets() -> List[Dict[str, str]]:
         rows, _ = discover_for_league(tag_id, league_name)
         all_rows.extend(rows)
     return all_rows
+
+
+def build_grouped_match_candidates(rows: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+    for row in rows:
+        slug = str(row.get("slug", "") or "")
+        match_key = derive_match_key(slug)
+        if not match_key:
+            continue
+        grouped.setdefault(match_key, []).append(row)
+
+    candidates: List[Dict[str, Any]] = []
+    for match_key, group_rows in grouped.items():
+        home_win_row: Optional[Dict[str, str]] = None
+        draw_row: Optional[Dict[str, str]] = None
+
+        for row in group_rows:
+            slug = str(row.get("slug", "") or "")
+            suffix = slug.split("-")[-1].strip().lower() if slug else ""
+            if row.get("market_kind") == "draw" or suffix == "draw":
+                if draw_row is None:
+                    draw_row = row
+                continue
+            if row.get("market_kind") == "home_win" and suffix != "draw" and home_win_row is None:
+                home_win_row = row
+
+        if home_win_row is None:
+            continue
+
+        if str(home_win_row.get("yes_token", "")).strip() == "" or str(home_win_row.get("no_token", "")).strip() == "":
+            continue
+
+        home_team_candidate = str(home_win_row.get("home_team", "") or "")
+        away_team_candidate = ""
+        if draw_row is not None:
+            home_team_candidate = str(draw_row.get("home_team", home_team_candidate) or home_team_candidate)
+            away_team_candidate = str(draw_row.get("away_team", "") or "")
+
+        match_date = str(home_win_row.get("match_date", "") or "")
+        if not match_date and draw_row is not None:
+            match_date = str(draw_row.get("match_date", "") or "")
+
+        candidates.append(
+            {
+                "match_key": match_key,
+                "league": str(home_win_row.get("league", "") or ""),
+                "match_date": match_date,
+                "home_team_candidate": home_team_candidate,
+                "away_team_candidate": away_team_candidate,
+                "home_win_row": home_win_row,
+                "draw_row": draw_row,
+            }
+        )
+
+    return candidates
 
 
 def write_market_map(rows: List[Dict[str, Any]]) -> None:
@@ -117,6 +192,7 @@ def main() -> None:
         print("APIFOOTBALL_API_KEY missing; wrote empty market_map.json")
         print("total discovered markets considered: 0")
         print("total eligible after league + home_win filtering: 0")
+        print("total grouped match candidates: 0")
         print("total successfully matched to fixtures: 0")
         print("total written to market_map.json: 0")
         print("counts by league written: {}")
@@ -131,14 +207,19 @@ def main() -> None:
         and str(row.get("yes_token", "")).strip() != ""
         and str(row.get("no_token", "")).strip() != ""
     ]
+    grouped_candidates = build_grouped_match_candidates(
+        [row for row in discovered if row.get("league") in TARGET_LEAGUES]
+    )
 
     written: List[Dict[str, Any]] = []
     seen_slugs: Set[str] = set()
     seen_yes_assets: Set[str] = set()
     counts_by_league: Counter = Counter()
     matched_count = 0
+    unmatched: List[Dict[str, str]] = []
 
-    for row in eligible:
+    for candidate in grouped_candidates:
+        row = candidate["home_win_row"]
         slug = str(row.get("slug", "") or "")
         yes_token = str(row.get("yes_token", "") or "")
         if not slug or not yes_token:
@@ -147,10 +228,21 @@ def main() -> None:
             continue
 
         fixture = find_matching_fixture(
-            home_team=str(row.get("home_team", "") or ""),
-            match_date=str(row.get("match_date", "") or ""),
+            home_team=str(candidate.get("home_team_candidate", "") or ""),
+            away_team=str(candidate.get("away_team_candidate", "") or ""),
+            match_date=str(candidate.get("match_date", "") or ""),
         )
         if fixture is None:
+            if len(unmatched) < 20:
+                unmatched.append(
+                    {
+                        "league": str(candidate.get("league", "") or ""),
+                        "match_key": str(candidate.get("match_key", "") or ""),
+                        "home_team": str(candidate.get("home_team_candidate", "") or ""),
+                        "away_team": str(candidate.get("away_team_candidate", "") or ""),
+                        "match_date": str(candidate.get("match_date", "") or ""),
+                    }
+                )
             continue
 
         matched_count += 1
@@ -175,8 +267,22 @@ def main() -> None:
 
     write_market_map(written)
 
+    if unmatched:
+        print("unmatched grouped candidates (up to 20):")
+        for item in unmatched:
+            print(
+                "%s | %s | %s | %s | %s"
+                % (
+                    item["league"],
+                    item["match_key"],
+                    item["home_team"],
+                    item["away_team"],
+                    item["match_date"],
+                )
+            )
     print("total discovered markets considered: %d" % len(discovered))
     print("total eligible after league + home_win filtering: %d" % len(eligible))
+    print("total grouped match candidates: %d" % len(grouped_candidates))
     print("total successfully matched to fixtures: %d" % matched_count)
     print("total written to market_map.json: %d" % len(written))
     print("counts by league written: %s" % json.dumps(dict(counts_by_league), sort_keys=True))
