@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from binary_bot.paper_executor import maybe_execute_paper_trade
 from shared.market_signal_snapshot import build_market_signal_snapshot
 from shared.order_sizing import size_from_signal_snapshot
 
@@ -113,7 +114,7 @@ def should_scan_fixture(
 def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) -> Dict[str, Any]:
     fixture_id = int(mapping_row["fixture_id"])
     snapshot = build_market_signal_snapshot(fixture_id=fixture_id)
-    signal_row = {
+    return {
         "timestamp": str(snapshot.get("timestamp", datetime.now(timezone.utc).isoformat()) or datetime.now(timezone.utc).isoformat()),
         "fixture_id": fixture_id,
         "market_name": str(snapshot.get("market_name", mapping_row.get("market_name", market_row.get("name", ""))) or ""),
@@ -141,19 +142,6 @@ def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) ->
         "action": str(snapshot.get("action", "HOLD") or "HOLD"),
         "side": snapshot.get("side"),
     }
-    if signal_row["action"] != "HOLD":
-        sizing = size_from_signal_snapshot(snapshot, bankroll=DEFAULT_BANKROLL)
-        signal_row.update(
-            {
-                "recommended_notional": sizing.get("recommended_notional"),
-                "recommended_shares": sizing.get("recommended_shares"),
-                "reason": sizing.get("reason"),
-                "risk_cap_notional": sizing.get("risk_cap_notional"),
-                "book_cap_notional": sizing.get("book_cap_notional"),
-                "edge_scale": sizing.get("edge_scale"),
-            }
-        )
-    return signal_row
 
 
 def _build_diagnostic_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | None:
@@ -316,13 +304,38 @@ def run_loop() -> None:
                 research_candidates.append(research_candidate)
                 research_signals_found += 1
             if signal_row.get("action") != "HOLD":
-                print(json.dumps(signal_row, sort_keys=True))
+                sizing_snapshot = size_from_signal_snapshot(signal_row, bankroll=DEFAULT_BANKROLL)
+                execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
+                signal_event = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "fixture_id": signal_row.get("fixture_id"),
+                    "market_name": signal_row.get("market_name"),
+                    "league": signal_row.get("league"),
+                    "side": signal_row.get("side"),
+                    "status": signal_row.get("status"),
+                    "minute": signal_row.get("minute"),
+                    "yes_edge": signal_row.get("yes_edge"),
+                    "no_edge": signal_row.get("no_edge"),
+                    "yes_ask": signal_row.get("yes_ask"),
+                    "no_ask": signal_row.get("no_ask"),
+                    "yes_ask_size": signal_row.get("yes_ask_size"),
+                    "no_ask_size": signal_row.get("no_ask_size"),
+                    "recommended_notional": sizing_snapshot.get("recommended_notional"),
+                    "recommended_shares": sizing_snapshot.get("recommended_shares"),
+                    "sizing_reason": sizing_snapshot.get("reason"),
+                    "risk_cap_notional": sizing_snapshot.get("risk_cap_notional"),
+                    "book_cap_notional": sizing_snapshot.get("book_cap_notional"),
+                    "edge_scale": sizing_snapshot.get("edge_scale"),
+                    "executed": execution_result.get("executed"),
+                    "execution_reason": execution_result.get("reason"),
+                }
+                print(json.dumps(signal_event, sort_keys=True))
                 append_jsonl(
                     SIGNAL_LOG_PATH,
                     {
                         "event_type": "buy_signal",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "data": signal_row,
+                        "data": signal_event,
                     },
                 )
                 signals_found += 1
