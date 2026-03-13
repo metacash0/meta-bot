@@ -42,6 +42,8 @@ def evaluate_home_win_market(
     max_spread: float = 0.04,
     min_top_size: float = 25.0,
     cost_buffer: float = 0.01,
+    base_edge_floor: float = 0.015,
+    spread_multiplier: float = 1.5,
 ) -> dict:
     home_yes_fair = clamp_prob(float(fair_snapshot.get("home_yes_fair", 0.0) or 0.0))
     home_no_fair = clamp_prob(float(fair_snapshot.get("home_no_fair", 0.0) or 0.0))
@@ -49,6 +51,8 @@ def evaluate_home_win_market(
     max_spread = float(max_spread)
     min_top_size = float(min_top_size)
     cost_buffer = float(cost_buffer)
+    base_edge_floor = float(base_edge_floor)
+    spread_multiplier = float(spread_multiplier)
     effective_min_edge = min_edge + cost_buffer
 
     yes_mid = compute_binary_mid(yes_bid, yes_ask)
@@ -66,6 +70,16 @@ def evaluate_home_win_market(
 
     yes_edge = home_yes_fair - yes_mid if yes_mid is not None else None
     no_edge = home_no_fair - no_mid if no_mid is not None else None
+    yes_required_edge = (
+        max(effective_min_edge, base_edge_floor + cost_buffer + spread_multiplier * yes_spread)
+        if yes_spread is not None
+        else effective_min_edge
+    )
+    no_required_edge = (
+        max(effective_min_edge, base_edge_floor + cost_buffer + spread_multiplier * no_spread)
+        if no_spread is not None
+        else effective_min_edge
+    )
     yes_tradable = (
         yes_spread is not None
         and yes_spread <= max_spread
@@ -81,8 +95,8 @@ def evaluate_home_win_market(
 
     action = "HOLD"
     side = None
-    yes_qualifies = yes_tradable and yes_edge is not None and yes_edge >= effective_min_edge
-    no_qualifies = no_tradable and no_edge is not None and no_edge >= effective_min_edge
+    yes_qualifies = yes_tradable and yes_edge is not None and yes_edge >= yes_required_edge
+    no_qualifies = no_tradable and no_edge is not None and no_edge >= no_required_edge
     if yes_qualifies and (not no_qualifies or float(yes_edge) >= float(no_edge)):
         action = "BUY_YES"
         side = "YES"
@@ -114,7 +128,11 @@ def evaluate_home_win_market(
         "max_spread": max_spread,
         "min_top_size": min_top_size,
         "cost_buffer": cost_buffer,
+        "base_edge_floor": base_edge_floor,
+        "spread_multiplier": spread_multiplier,
         "effective_min_edge": effective_min_edge,
+        "yes_required_edge": yes_required_edge,
+        "no_required_edge": no_required_edge,
         "yes_tradable": yes_tradable,
         "no_tradable": no_tradable,
         "action": action,
@@ -131,11 +149,11 @@ if __name__ == "__main__":
                     "fixture_id": 1,
                     "home_team": "Home A",
                     "away_team": "Away A",
-                    "home_yes_fair": 0.56,
-                    "home_no_fair": 0.44,
+                    "home_yes_fair": 0.528,
+                    "home_no_fair": 0.472,
                 },
-                "yes_bid": 0.45,
-                "yes_ask": 0.52,
+                "yes_bid": 0.50,
+                "yes_ask": 0.502,
                 "yes_ask_size": 100.0,
                 "min_edge": 0.03,
             },
@@ -147,12 +165,12 @@ if __name__ == "__main__":
                     "fixture_id": 2,
                     "home_team": "Home B",
                     "away_team": "Away B",
-                    "home_yes_fair": 0.57,
-                    "home_no_fair": 0.43,
+                    "home_yes_fair": 0.528,
+                    "home_no_fair": 0.472,
                 },
-                "yes_bid": 0.47,
-                "yes_ask": 0.49,
-                "yes_ask_size": 10.0,
+                "yes_bid": 0.48,
+                "yes_ask": 0.50,
+                "yes_ask_size": 100.0,
                 "min_edge": 0.03,
             },
         },
@@ -163,8 +181,8 @@ if __name__ == "__main__":
                     "fixture_id": 3,
                     "home_team": "Home C",
                     "away_team": "Away C",
-                    "home_yes_fair": 0.56,
-                    "home_no_fair": 0.44,
+                    "home_yes_fair": 0.58,
+                    "home_no_fair": 0.42,
                 },
                 "yes_bid": 0.47,
                 "yes_ask": 0.49,
