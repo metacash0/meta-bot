@@ -43,7 +43,7 @@ def evaluate_home_win_market(
     min_top_size: float = 25.0,
     cost_buffer: float = 0.01,
     base_edge_floor: float = 0.015,
-    spread_multiplier: float = 1.5,
+    spread_multiplier: float = 1.0,
 ) -> dict:
     home_yes_fair = clamp_prob(float(fair_snapshot.get("home_yes_fair", 0.0) or 0.0))
     home_no_fair = clamp_prob(float(fair_snapshot.get("home_no_fair", 0.0) or 0.0))
