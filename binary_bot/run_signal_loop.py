@@ -14,6 +14,7 @@ FIXTURE_MAPPING_INDEX_PATH = "data/fixture_mapping_index.json"
 MARKET_MAP_PATH = "data/market_map.json"
 SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
+PREMATCH_WINDOW_HOURS = 24.0
 
 
 def _read_json_rows(path: str, key: str) -> List[Dict[str, Any]]:
@@ -49,6 +50,31 @@ def find_market_row(fixture_id: int, rows: List[Dict[str, Any]]) -> Optional[Dic
         if row_fixture_id == int(fixture_id):
             return row
     return None
+
+
+def should_scan_fixture(
+    mapping_row: dict,
+    now_utc: datetime,
+    prematch_window_hours: float,
+    include_live: bool = True,
+) -> bool:
+    _ = include_live
+    raw_commence_time = str(mapping_row.get("commence_time", "") or "").strip()
+    if not raw_commence_time:
+        return False
+
+    try:
+        commence_time = datetime.fromisoformat(raw_commence_time.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+
+    if commence_time.tzinfo is None:
+        commence_time = commence_time.replace(tzinfo=timezone.utc)
+    else:
+        commence_time = commence_time.astimezone(timezone.utc)
+
+    hours_to_kickoff = (commence_time - now_utc).total_seconds() / 3600.0
+    return 0.0 <= hours_to_kickoff <= float(prematch_window_hours)
 
 
 def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) -> Dict[str, Any]:
@@ -147,12 +173,22 @@ def run_loop() -> None:
     while True:
         mapping_rows = read_fixture_mapping_index()
         market_rows = read_market_map()
+        now_utc = datetime.now(timezone.utc)
 
+        fixtures_eligible = 0
         fixtures_scanned = 0
         signals_found = 0
         diagnostic_candidates: List[Dict[str, Any]] = []
 
         for mapping_row in mapping_rows:
+            if not should_scan_fixture(
+                mapping_row=mapping_row,
+                now_utc=now_utc,
+                prematch_window_hours=PREMATCH_WINDOW_HOURS,
+            ):
+                continue
+            fixtures_eligible += 1
+
             try:
                 fixture_id = int(mapping_row.get("fixture_id"))
             except (TypeError, ValueError):
@@ -187,6 +223,7 @@ def run_loop() -> None:
                 {
                     "scan_complete": True,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "fixtures_eligible": fixtures_eligible,
                     "fixtures_scanned": fixtures_scanned,
                     "signals_found": signals_found,
                 },
