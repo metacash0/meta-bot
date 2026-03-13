@@ -102,6 +102,8 @@ def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) ->
         "no_spread": snapshot.get("no_spread"),
         "no_edge": snapshot.get("no_edge"),
         "effective_min_edge": snapshot.get("effective_min_edge"),
+        "yes_tradable": snapshot.get("yes_tradable"),
+        "no_tradable": snapshot.get("no_tradable"),
         "action": str(snapshot.get("action", "HOLD") or "HOLD"),
         "side": snapshot.get("side"),
     }
