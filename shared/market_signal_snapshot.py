@@ -61,6 +61,10 @@ def build_market_signal_snapshot(
     resolved_yes_ask = yes_ask if yes_ask is not None else fetched_quotes.get("yes_ask")
     resolved_no_bid = no_bid if no_bid is not None else fetched_quotes.get("no_bid")
     resolved_no_ask = no_ask if no_ask is not None else fetched_quotes.get("no_ask")
+    resolved_yes_bid_size = fetched_quotes.get("yes_bid_size")
+    resolved_yes_ask_size = fetched_quotes.get("yes_ask_size")
+    resolved_no_bid_size = fetched_quotes.get("no_bid_size")
+    resolved_no_ask_size = fetched_quotes.get("no_ask_size")
 
     fair_snapshot = build_live_fair_snapshot(fixture_id)
     edge_eval = evaluate_home_win_market(
@@ -69,6 +73,10 @@ def build_market_signal_snapshot(
         yes_ask=resolved_yes_ask,
         no_bid=resolved_no_bid,
         no_ask=resolved_no_ask,
+        yes_bid_size=resolved_yes_bid_size,
+        yes_ask_size=resolved_yes_ask_size,
+        no_bid_size=resolved_no_bid_size,
+        no_ask_size=resolved_no_ask_size,
         min_edge=min_edge,
     )
 
@@ -89,13 +97,22 @@ def build_market_signal_snapshot(
         "home_no_fair": float(fair_snapshot.get("home_no_fair", 0.0) or 0.0),
         "yes_bid": resolved_yes_bid,
         "yes_ask": resolved_yes_ask,
+        "yes_bid_size": resolved_yes_bid_size,
+        "yes_ask_size": resolved_yes_ask_size,
         "yes_mid": edge_eval.get("yes_mid"),
+        "yes_spread": edge_eval.get("yes_spread"),
         "no_bid": resolved_no_bid,
         "no_ask": resolved_no_ask,
+        "no_bid_size": resolved_no_bid_size,
+        "no_ask_size": resolved_no_ask_size,
         "no_mid": edge_eval.get("no_mid"),
+        "no_spread": edge_eval.get("no_spread"),
         "yes_edge": edge_eval.get("yes_edge"),
         "no_edge": edge_eval.get("no_edge"),
         "min_edge": float(edge_eval.get("min_edge", min_edge) or min_edge),
+        "yes_tradable": edge_eval.get("yes_tradable"),
+        "no_tradable": edge_eval.get("no_tradable"),
+        "effective_min_edge": edge_eval.get("effective_min_edge"),
         "action": str(edge_eval.get("action", "HOLD") or "HOLD"),
         "side": edge_eval.get("side"),
         "yes_asset_id": yes_asset_id,
