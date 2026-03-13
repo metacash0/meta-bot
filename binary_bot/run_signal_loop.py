@@ -94,6 +94,55 @@ def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) ->
     return signal_row
 
 
+def _build_diagnostic_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | None:
+    effective_min_edge = signal_row.get("effective_min_edge")
+    try:
+        effective_min_edge_val = float(effective_min_edge) if effective_min_edge is not None else None
+    except (TypeError, ValueError):
+        effective_min_edge_val = None
+
+    yes_edge = signal_row.get("yes_edge")
+    no_edge = signal_row.get("no_edge")
+
+    yes_gap = None
+    no_gap = None
+    if effective_min_edge_val is not None and yes_edge is not None:
+        try:
+            yes_gap = effective_min_edge_val - float(yes_edge)
+        except (TypeError, ValueError):
+            yes_gap = None
+    if effective_min_edge_val is not None and no_edge is not None:
+        try:
+            no_gap = effective_min_edge_val - float(no_edge)
+        except (TypeError, ValueError):
+            no_gap = None
+
+    valid_gaps = [gap for gap in (yes_gap, no_gap) if gap is not None]
+    if not valid_gaps:
+        return None
+
+    return {
+        "market_name": signal_row.get("market_name"),
+        "league": signal_row.get("league"),
+        "fixture_id": signal_row.get("fixture_id"),
+        "home_team": signal_row.get("home_team"),
+        "away_team": signal_row.get("away_team"),
+        "minute": signal_row.get("minute"),
+        "yes_edge": yes_edge,
+        "no_edge": no_edge,
+        "yes_gap": yes_gap,
+        "no_gap": no_gap,
+        "yes_tradable": signal_row.get("yes_tradable"),
+        "no_tradable": signal_row.get("no_tradable"),
+        "yes_spread": signal_row.get("yes_spread"),
+        "no_spread": signal_row.get("no_spread"),
+        "yes_ask_size": signal_row.get("yes_ask_size"),
+        "no_ask_size": signal_row.get("no_ask_size"),
+        "effective_min_edge": effective_min_edge,
+        "best_gap": min(valid_gaps),
+    }
+
+
 def run_loop() -> None:
     while True:
         mapping_rows = read_fixture_mapping_index()
@@ -101,6 +150,7 @@ def run_loop() -> None:
 
         fixtures_scanned = 0
         signals_found = 0
+        diagnostic_candidates: List[Dict[str, Any]] = []
 
         for mapping_row in mapping_rows:
             try:
@@ -118,9 +168,19 @@ def run_loop() -> None:
                 continue
 
             fixtures_scanned += 1
+            diagnostic_candidate = _build_diagnostic_candidate(signal_row)
+            if diagnostic_candidate is not None:
+                diagnostic_candidates.append(diagnostic_candidate)
             if signal_row.get("action") != "HOLD":
                 print(json.dumps(signal_row, sort_keys=True))
                 signals_found += 1
+
+        diagnostic_candidates.sort(key=lambda row: row["best_gap"])
+        near_signals = []
+        for row in diagnostic_candidates[:3]:
+            row_copy = dict(row)
+            row_copy.pop("best_gap", None)
+            near_signals.append(row_copy)
 
         print(
             json.dumps(
@@ -129,6 +189,15 @@ def run_loop() -> None:
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "fixtures_scanned": fixtures_scanned,
                     "signals_found": signals_found,
+                },
+                sort_keys=True,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "near_signals": near_signals,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
                 sort_keys=True,
             )
