@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from binary_bot.paper_executor import maybe_execute_paper_trade
+from binary_bot.paper_settlement import settle_open_positions
 from shared.market_signal_snapshot import build_market_signal_snapshot
 from shared.order_sizing import size_from_signal_snapshot
 
@@ -245,6 +246,20 @@ def _build_research_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | No
 
 def run_loop() -> None:
     while True:
+        settlement_summary = settle_open_positions()
+        if int(settlement_summary.get("positions_settled", 0) or 0) > 0:
+            print(
+                json.dumps(
+                    {
+                        "event_type": "paper_settlement_summary",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "positions_checked": int(settlement_summary.get("positions_checked", 0) or 0),
+                        "positions_settled": int(settlement_summary.get("positions_settled", 0) or 0),
+                        "positions_still_open": int(settlement_summary.get("positions_still_open", 0) or 0),
+                    },
+                    sort_keys=True,
+                )
+            )
         mapping_rows = read_fixture_mapping_index()
         market_rows = read_market_map()
         now_utc = datetime.now(timezone.utc)
