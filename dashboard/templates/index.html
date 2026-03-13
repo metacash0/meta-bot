@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Paper Bot Controls</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2rem;
+        color: #1f2937;
+        background: #f8fafc;
+      }
+      .card {
+        max-width: 720px;
+        background: #ffffff;
+        border: 1px solid #dbe3ec;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+      }
+      h1, h2 {
+        margin-top: 0;
+      }
+      .row {
+        margin-bottom: 1rem;
+      }
+      label {
+        display: block;
+        margin-bottom: 0.4rem;
+        font-weight: 600;
+      }
+      .checkbox {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      input[type="number"] {
+        width: 100%;
+        max-width: 220px;
+        padding: 0.5rem;
+      }
+      button {
+        padding: 0.7rem 1rem;
+        border: 0;
+        border-radius: 8px;
+        background: #0f766e;
+        color: white;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      pre {
+        background: #f1f5f9;
+        border-radius: 8px;
+        padding: 1rem;
+        overflow-x: auto;
+      }
+      .muted {
+        color: #475569;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>Paper Bot Dashboard</h1>
+      <p class="muted">Current control state for the paper trading scanner.</p>
+
+      <h2>Current Values</h2>
+      <pre>{{ controls | tojson(indent=2) }}</pre>
+      <p class="muted">Updated at: {{ controls.updated_at }}</p>
+
+      <h2>Update Controls</h2>
+      <form method="post" action="/update-controls">
+        <div class="checkbox">
+          <input type="checkbox" id="trading_enabled" name="trading_enabled" {% if controls.trading_enabled %}checked{% endif %}>
+          <label for="trading_enabled">Trading Enabled</label>
+        </div>
+
+        <div class="checkbox">
+          <input type="checkbox" id="new_entries_enabled" name="new_entries_enabled" {% if controls.new_entries_enabled %}checked{% endif %}>
+          <label for="new_entries_enabled">New Entries Enabled</label>
+        </div>
+
+        <div class="checkbox">
+          <input type="checkbox" id="scale_ins_enabled" name="scale_ins_enabled" {% if controls.scale_ins_enabled %}checked{% endif %}>
+          <label for="scale_ins_enabled">Scale-Ins Enabled</label>
+        </div>
+
+        <div class="row">
+          <label for="prematch_window_hours">Prematch Window Hours</label>
+          <input
+            type="number"
+            id="prematch_window_hours"
+            name="prematch_window_hours"
+            min="0"
+            step="0.5"
+            value="{{ controls.prematch_window_hours }}"
+          >
+        </div>
+
+        <button type="submit">Save Controls</button>
+      </form>
+    </div>
+  </body>
+</html>
