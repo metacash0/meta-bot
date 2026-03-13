@@ -15,6 +15,7 @@ MARKET_MAP_PATH = "data/market_map.json"
 SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
 PREMATCH_WINDOW_HOURS = 24.0
+RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
 
 
 def _read_json_rows(path: str, key: str) -> List[Dict[str, Any]]:
@@ -171,6 +172,56 @@ def _build_diagnostic_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | 
     }
 
 
+def _build_research_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | None:
+    yes_tradable = signal_row.get("yes_tradable")
+    no_tradable = signal_row.get("no_tradable")
+    yes_edge = signal_row.get("yes_edge")
+    no_edge = signal_row.get("no_edge")
+
+    yes_qualifies = (
+        yes_tradable is True
+        and yes_edge is not None
+        and float(yes_edge) >= RESEARCH_EFFECTIVE_MIN_EDGE
+    )
+    no_qualifies = (
+        no_tradable is True
+        and no_edge is not None
+        and float(no_edge) >= RESEARCH_EFFECTIVE_MIN_EDGE
+    )
+    if not yes_qualifies and not no_qualifies:
+        return None
+
+    research_side = None
+    research_edge = None
+    if yes_qualifies and (not no_qualifies or float(yes_edge) >= float(no_edge)):
+        research_side = "YES"
+        research_edge = yes_edge
+    elif no_qualifies:
+        research_side = "NO"
+        research_edge = no_edge
+
+    return {
+        "market_name": signal_row.get("market_name"),
+        "league": signal_row.get("league"),
+        "fixture_id": signal_row.get("fixture_id"),
+        "home_team": signal_row.get("home_team"),
+        "away_team": signal_row.get("away_team"),
+        "minute": signal_row.get("minute"),
+        "research_effective_min_edge": RESEARCH_EFFECTIVE_MIN_EDGE,
+        "production_effective_min_edge": signal_row.get("effective_min_edge"),
+        "yes_edge": yes_edge,
+        "no_edge": no_edge,
+        "yes_tradable": yes_tradable,
+        "no_tradable": no_tradable,
+        "yes_spread": signal_row.get("yes_spread"),
+        "no_spread": signal_row.get("no_spread"),
+        "yes_ask_size": signal_row.get("yes_ask_size"),
+        "no_ask_size": signal_row.get("no_ask_size"),
+        "research_side": research_side,
+        "research_edge": research_edge,
+    }
+
+
 def run_loop() -> None:
     while True:
         mapping_rows = read_fixture_mapping_index()
@@ -180,7 +231,9 @@ def run_loop() -> None:
         fixtures_eligible = 0
         fixtures_scanned = 0
         signals_found = 0
+        research_signals_found = 0
         diagnostic_candidates: List[Dict[str, Any]] = []
+        research_candidates: List[Dict[str, Any]] = []
 
         for mapping_row in mapping_rows:
             if not should_scan_fixture(
@@ -209,6 +262,10 @@ def run_loop() -> None:
             diagnostic_candidate = _build_diagnostic_candidate(signal_row)
             if diagnostic_candidate is not None:
                 diagnostic_candidates.append(diagnostic_candidate)
+            research_candidate = _build_research_candidate(signal_row)
+            if research_candidate is not None:
+                research_candidates.append(research_candidate)
+                research_signals_found += 1
             if signal_row.get("action") != "HOLD":
                 print(json.dumps(signal_row, sort_keys=True))
                 signals_found += 1
@@ -219,6 +276,10 @@ def run_loop() -> None:
             row_copy = dict(row)
             row_copy.pop("best_gap", None)
             near_signals.append(row_copy)
+        research_candidates.sort(
+            key=lambda row: float(row.get("research_edge", 0.0) or 0.0),
+            reverse=True,
+        )
 
         print(
             json.dumps(
@@ -228,6 +289,7 @@ def run_loop() -> None:
                     "fixtures_eligible": fixtures_eligible,
                     "fixtures_scanned": fixtures_scanned,
                     "signals_found": signals_found,
+                    "research_signals_found": research_signals_found,
                 },
                 sort_keys=True,
             )
@@ -236,6 +298,15 @@ def run_loop() -> None:
             json.dumps(
                 {
                     "near_signals": near_signals,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+                sort_keys=True,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "research_signals": research_candidates[:5],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 },
                 sort_keys=True,
