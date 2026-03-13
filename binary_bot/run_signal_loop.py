@@ -12,10 +12,14 @@ from shared.order_sizing import size_from_signal_snapshot
 
 FIXTURE_MAPPING_INDEX_PATH = "data/fixture_mapping_index.json"
 MARKET_MAP_PATH = "data/market_map.json"
+SCAN_LOG_PATH = "data/logs/scan_summary.jsonl"
+SIGNAL_LOG_PATH = "data/logs/signal_events.jsonl"
 SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
 PREMATCH_WINDOW_HOURS = float(os.getenv("PREMATCH_WINDOW_HOURS", "6"))
 RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
+
+os.makedirs("data/logs", exist_ok=True)
 
 
 def _read_json_rows(path: str, key: str) -> List[Dict[str, Any]]:
@@ -32,6 +36,14 @@ def _read_json_rows(path: str, key: str) -> List[Dict[str, Any]]:
     if not isinstance(rows, list):
         return []
     return [row for row in rows if isinstance(row, dict)]
+
+
+def append_jsonl(path: str, payload: dict) -> None:
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, sort_keys=True) + "\n")
+    except Exception:
+        pass
 
 
 def read_fixture_mapping_index() -> List[Dict[str, Any]]:
@@ -294,6 +306,14 @@ def run_loop() -> None:
                 research_signals_found += 1
             if signal_row.get("action") != "HOLD":
                 print(json.dumps(signal_row, sort_keys=True))
+                append_jsonl(
+                    SIGNAL_LOG_PATH,
+                    {
+                        "event_type": "buy_signal",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "data": signal_row,
+                    },
+                )
                 signals_found += 1
 
         diagnostic_candidates.sort(key=lambda row: row["best_gap"])
@@ -307,39 +327,61 @@ def run_loop() -> None:
             reverse=True,
         )
 
+        summary_payload = {
+            "scan_complete": True,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "fixtures_eligible": fixtures_eligible,
+            "fixtures_scanned": fixtures_scanned,
+            "signals_found": signals_found,
+            "research_signals_found": research_signals_found,
+            "prematch_window_hours": PREMATCH_WINDOW_HOURS,
+            "bucket_counts": bucket_counts,
+        }
         print(
             json.dumps(
-                {
-                    "scan_complete": True,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "fixtures_eligible": fixtures_eligible,
-                    "fixtures_scanned": fixtures_scanned,
-                    "signals_found": signals_found,
-                    "research_signals_found": research_signals_found,
-                    "prematch_window_hours": PREMATCH_WINDOW_HOURS,
-                    "bucket_counts": bucket_counts,
-                },
+                summary_payload,
                 sort_keys=True,
             )
         )
+        append_jsonl(SCAN_LOG_PATH, summary_payload)
+        near_signals_payload = {
+            "near_signals": near_signals,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
         print(
             json.dumps(
-                {
-                    "near_signals": near_signals,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
+                near_signals_payload,
                 sort_keys=True,
             )
         )
+        for row in near_signals:
+            append_jsonl(
+                SIGNAL_LOG_PATH,
+                {
+                    "event_type": "near_signal",
+                    "timestamp": near_signals_payload["timestamp"],
+                    "data": row,
+                },
+            )
+        research_signals_payload = {
+            "research_signals": research_candidates[:5],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
         print(
             json.dumps(
-                {
-                    "research_signals": research_candidates[:5],
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
+                research_signals_payload,
                 sort_keys=True,
             )
         )
+        for row in research_signals_payload["research_signals"]:
+            append_jsonl(
+                SIGNAL_LOG_PATH,
+                {
+                    "event_type": "research_signal",
+                    "timestamp": research_signals_payload["timestamp"],
+                    "data": row,
+                },
+            )
         time.sleep(10)
 
 
