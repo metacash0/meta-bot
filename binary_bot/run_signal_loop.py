@@ -14,7 +14,7 @@ FIXTURE_MAPPING_INDEX_PATH = "data/fixture_mapping_index.json"
 MARKET_MAP_PATH = "data/market_map.json"
 SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
-PREMATCH_WINDOW_HOURS = 24.0
+PREMATCH_WINDOW_HOURS = 6.0
 RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
 
 
@@ -53,6 +53,35 @@ def find_market_row(fixture_id: int, rows: List[Dict[str, Any]]) -> Optional[Dic
     return None
 
 
+def _hours_to_kickoff(mapping_row: dict, now_utc: datetime) -> float | None:
+    raw_commence_time = str(mapping_row.get("commence_time", "") or "").strip()
+    if not raw_commence_time:
+        return None
+
+    try:
+        commence_time = datetime.fromisoformat(raw_commence_time.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+    if commence_time.tzinfo is None:
+        commence_time = commence_time.replace(tzinfo=timezone.utc)
+    else:
+        commence_time = commence_time.astimezone(timezone.utc)
+
+    return (commence_time - now_utc).total_seconds() / 3600.0
+
+
+def kickoff_bucket(hours_to_kickoff: float) -> str | None:
+    hours_to_kickoff = float(hours_to_kickoff)
+    if 0.0 <= hours_to_kickoff < 1.0:
+        return "0_1h"
+    if 1.0 <= hours_to_kickoff < 3.0:
+        return "1_3h"
+    if 3.0 <= hours_to_kickoff <= 6.0:
+        return "3_6h"
+    return None
+
+
 def should_scan_fixture(
     mapping_row: dict,
     now_utc: datetime,
@@ -60,21 +89,9 @@ def should_scan_fixture(
     include_live: bool = True,
 ) -> bool:
     _ = include_live
-    raw_commence_time = str(mapping_row.get("commence_time", "") or "").strip()
-    if not raw_commence_time:
+    hours_to_kickoff = _hours_to_kickoff(mapping_row, now_utc)
+    if hours_to_kickoff is None:
         return False
-
-    try:
-        commence_time = datetime.fromisoformat(raw_commence_time.replace("Z", "+00:00"))
-    except ValueError:
-        return False
-
-    if commence_time.tzinfo is None:
-        commence_time = commence_time.replace(tzinfo=timezone.utc)
-    else:
-        commence_time = commence_time.astimezone(timezone.utc)
-
-    hours_to_kickoff = (commence_time - now_utc).total_seconds() / 3600.0
     return 0.0 <= hours_to_kickoff <= float(prematch_window_hours)
 
 
@@ -234,8 +251,12 @@ def run_loop() -> None:
         research_signals_found = 0
         diagnostic_candidates: List[Dict[str, Any]] = []
         research_candidates: List[Dict[str, Any]] = []
+        bucket_counts = {"0_1h": 0, "1_3h": 0, "3_6h": 0}
 
         for mapping_row in mapping_rows:
+            hours_to_kickoff = _hours_to_kickoff(mapping_row, now_utc)
+            if hours_to_kickoff is None:
+                continue
             if not should_scan_fixture(
                 mapping_row=mapping_row,
                 now_utc=now_utc,
@@ -243,6 +264,9 @@ def run_loop() -> None:
             ):
                 continue
             fixtures_eligible += 1
+            bucket = kickoff_bucket(hours_to_kickoff)
+            if bucket is not None:
+                bucket_counts[bucket] += 1
 
             try:
                 fixture_id = int(mapping_row.get("fixture_id"))
@@ -290,6 +314,8 @@ def run_loop() -> None:
                     "fixtures_scanned": fixtures_scanned,
                     "signals_found": signals_found,
                     "research_signals_found": research_signals_found,
+                    "prematch_window_hours": PREMATCH_WINDOW_HOURS,
+                    "bucket_counts": bucket_counts,
                 },
                 sort_keys=True,
             )
