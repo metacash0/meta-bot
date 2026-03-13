@@ -18,6 +18,7 @@ SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
 PREMATCH_WINDOW_HOURS = float(os.getenv("PREMATCH_WINDOW_HOURS", "6"))
 RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
+INCLUDE_LIVE_FIXTURES = True
 
 os.makedirs("data/logs", exist_ok=True)
 
@@ -120,6 +121,7 @@ def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) ->
         "minute": int(snapshot.get("minute", 0) or 0),
         "home_team": str(snapshot.get("home_team", market_row.get("home_team", "")) or ""),
         "away_team": str(snapshot.get("away_team", market_row.get("away_team", "")) or ""),
+        "status": str(snapshot.get("status", "") or ""),
         "home_yes_fair": float(snapshot.get("home_yes_fair", 0.0) or 0.0),
         "yes_bid": snapshot.get("yes_bid"),
         "yes_ask": snapshot.get("yes_ask"),
@@ -261,6 +263,7 @@ def run_loop() -> None:
 
         fixtures_eligible = 0
         fixtures_scanned = 0
+        live_fixtures_scanned = 0
         signals_found = 0
         research_signals_found = 0
         diagnostic_candidates: List[Dict[str, Any]] = []
@@ -271,16 +274,18 @@ def run_loop() -> None:
             hours_to_kickoff = _hours_to_kickoff(mapping_row, now_utc)
             if hours_to_kickoff is None:
                 continue
-            if not should_scan_fixture(
+            is_prematch_eligible = should_scan_fixture(
                 mapping_row=mapping_row,
                 now_utc=now_utc,
                 prematch_window_hours=PREMATCH_WINDOW_HOURS,
-            ):
+            )
+            if is_prematch_eligible:
+                fixtures_eligible += 1
+                bucket = kickoff_bucket(hours_to_kickoff)
+                if bucket is not None:
+                    bucket_counts[bucket] += 1
+            elif not INCLUDE_LIVE_FIXTURES:
                 continue
-            fixtures_eligible += 1
-            bucket = kickoff_bucket(hours_to_kickoff)
-            if bucket is not None:
-                bucket_counts[bucket] += 1
 
             try:
                 fixture_id = int(mapping_row.get("fixture_id"))
@@ -295,6 +300,12 @@ def run_loop() -> None:
                 signal_row = build_signal_row(mapping_row, market_row)
             except Exception:
                 continue
+
+            if not is_prematch_eligible:
+                if signal_row.get("status") not in {"1H", "HT", "2H"}:
+                    continue
+                fixtures_eligible += 1
+                live_fixtures_scanned += 1
 
             fixtures_scanned += 1
             diagnostic_candidate = _build_diagnostic_candidate(signal_row)
@@ -332,9 +343,11 @@ def run_loop() -> None:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "fixtures_eligible": fixtures_eligible,
             "fixtures_scanned": fixtures_scanned,
+            "live_fixtures_scanned": live_fixtures_scanned,
             "signals_found": signals_found,
             "research_signals_found": research_signals_found,
             "prematch_window_hours": PREMATCH_WINDOW_HOURS,
+            "include_live_fixtures": INCLUDE_LIVE_FIXTURES,
             "bucket_counts": bucket_counts,
         }
         print(
