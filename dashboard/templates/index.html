@@ -3,104 +3,479 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Paper Bot Controls</title>
+    <title>Paper Bot Trading Console</title>
     <style>
+      :root {
+        --bg: #0b1020;
+        --panel: #11182d;
+        --panel-2: #151d35;
+        --border: #25304d;
+        --text: #e5ecff;
+        --muted: #8ea0c7;
+        --green: #22c55e;
+        --green-bg: rgba(34, 197, 94, 0.14);
+        --red: #ef4444;
+        --red-bg: rgba(239, 68, 68, 0.14);
+        --amber: #f59e0b;
+        --cyan: #38bdf8;
+      }
+      * {
+        box-sizing: border-box;
+      }
       body {
-        font-family: sans-serif;
-        margin: 2rem;
-        color: #1f2937;
-        background: #f8fafc;
+        margin: 0;
+        background:
+          radial-gradient(circle at top, rgba(56, 189, 248, 0.08), transparent 30%),
+          linear-gradient(180deg, #09101e 0%, #0b1020 100%);
+        color: var(--text);
+        font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace;
+      }
+      .page {
+        max-width: 1500px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .title h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+      .title p,
+      .meta {
+        margin: 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .grid {
+        display: grid;
+        gap: 18px;
+      }
+      .stats {
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        margin-bottom: 20px;
+      }
+      .two-col {
+        grid-template-columns: minmax(320px, 420px) 1fr;
+        align-items: start;
       }
       .card {
-        max-width: 720px;
-        background: #ffffff;
-        border: 1px solid #dbe3ec;
-        border-radius: 12px;
-        padding: 1.5rem;
-        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+        background: linear-gradient(180deg, rgba(21, 29, 53, 0.95), rgba(17, 24, 45, 0.95));
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 18px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
       }
-      h1, h2 {
-        margin-top: 0;
+      .card h2 {
+        margin: 0 0 14px;
+        font-size: 16px;
       }
-      .row {
-        margin-bottom: 1rem;
+      .stat-value {
+        font-size: 26px;
+        font-weight: 700;
+        margin-bottom: 8px;
       }
-      label {
-        display: block;
-        margin-bottom: 0.4rem;
-        font-weight: 600;
+      .muted {
+        color: var(--muted);
       }
-      .checkbox {
+      .controls-form {
+        display: grid;
+        gap: 12px;
+      }
+      .control-row {
         display: flex;
         align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 0.75rem;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 10px;
+      }
+      .checkbox-wrap {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--green);
       }
       input[type="number"] {
-        width: 100%;
-        max-width: 220px;
-        padding: 0.5rem;
+        width: 140px;
+        background: #0b1020;
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-family: inherit;
       }
       button {
-        padding: 0.7rem 1rem;
         border: 0;
-        border-radius: 8px;
-        background: #0f766e;
+        border-radius: 10px;
+        padding: 12px 16px;
+        background: linear-gradient(135deg, #0891b2, #2563eb);
         color: white;
+        font-family: inherit;
         font-weight: 700;
         cursor: pointer;
       }
-      pre {
-        background: #f1f5f9;
-        border-radius: 8px;
-        padding: 1rem;
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .badge.on {
+        color: #b8ffd1;
+        background: var(--green-bg);
+        border: 1px solid rgba(34, 197, 94, 0.25);
+      }
+      .badge.off {
+        color: #ffc4c4;
+        background: var(--red-bg);
+        border: 1px solid rgba(239, 68, 68, 0.25);
+      }
+      .scan-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 12px;
+      }
+      .scan-item {
+        padding: 12px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .scan-item .label {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 6px;
+      }
+      .scan-item .value {
+        font-size: 16px;
+        font-weight: 700;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        text-align: left;
+        padding: 10px 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        vertical-align: top;
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+        font-size: 12px;
+      }
+      .table-wrap {
         overflow-x: auto;
       }
-      .muted {
-        color: #475569;
+      .event-feed {
+        display: grid;
+        gap: 10px;
+      }
+      .event {
+        padding: 12px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+      }
+      .event-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .event pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+        color: #d6def7;
+      }
+      .empty {
+        color: var(--muted);
+        padding: 12px 0;
+      }
+      .pnl-pos { color: #86efac; }
+      .pnl-neg { color: #fca5a5; }
+      @media (max-width: 980px) {
+        .two-col {
+          grid-template-columns: 1fr;
+        }
+        .topbar {
+          flex-direction: column;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="card">
-      <h1>Paper Bot Dashboard</h1>
-      <p class="muted">Current control state for the paper trading scanner.</p>
+    <div class="page">
+      <div class="topbar">
+        <div class="title">
+          <h1>Paper Trading Console</h1>
+          <p>Protected operator dashboard for monitoring and controlling the paper bot.</p>
+        </div>
+        <div class="meta">
+          <div>Controls updated: {{ controls.updated_at }}</div>
+          {% if latest_scan_summary %}
+          <div>Latest scan: {{ latest_scan_summary.timestamp or "unknown" }}</div>
+          {% endif %}
+        </div>
+      </div>
 
-      <h2>Current Values</h2>
-      <pre>{{ controls | tojson(indent=2) }}</pre>
-      <p class="muted">Updated at: {{ controls.updated_at }}</p>
+      <div class="grid stats">
+        <div class="card">
+          <div class="muted">Open Positions</div>
+          <div class="stat-value">{{ open_positions_summary.open_positions }}</div>
+          <div class="muted">YES {{ open_positions_summary.open_yes_positions }} | NO {{ open_positions_summary.open_no_positions }}</div>
+        </div>
+        <div class="card">
+          <div class="muted">Open Total Notional</div>
+          <div class="stat-value">{{ "%.2f"|format(open_positions_summary.open_total_notional) }}</div>
+          <div class="muted">YES {{ "%.2f"|format(open_positions_summary.open_yes_notional) }} | NO {{ "%.2f"|format(open_positions_summary.open_no_notional) }}</div>
+        </div>
+        <div class="card">
+          <div class="muted">Settled Trades</div>
+          <div class="stat-value">{{ realized_pnl_summary.settled_trades }}</div>
+          <div class="muted">Average ROI {{ "%.4f"|format(realized_pnl_summary.avg_roi) }}</div>
+        </div>
+        <div class="card">
+          <div class="muted">Realized Gross PnL</div>
+          <div class="stat-value {% if realized_pnl_summary.realized_gross_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+            {{ "%.2f"|format(realized_pnl_summary.realized_gross_pnl) }}
+          </div>
+          <div class="muted">From {{ realized_pnl_summary.settled_trades }} settlements</div>
+        </div>
+      </div>
 
-      <h2>Update Controls</h2>
-      <form method="post" action="/update-controls">
-        <div class="checkbox">
-          <input type="checkbox" id="trading_enabled" name="trading_enabled" {% if controls.trading_enabled %}checked{% endif %}>
-          <label for="trading_enabled">Trading Enabled</label>
+      <div class="grid two-col">
+        <div class="card">
+          <h2>Controls</h2>
+          <div class="controls-form">
+            <div class="control-row">
+              <span>Trading</span>
+              <span class="badge {% if controls.trading_enabled %}on{% else %}off{% endif %}">
+                {{ "ENABLED" if controls.trading_enabled else "DISABLED" }}
+              </span>
+            </div>
+            <div class="control-row">
+              <span>New Entries</span>
+              <span class="badge {% if controls.new_entries_enabled %}on{% else %}off{% endif %}">
+                {{ "ENABLED" if controls.new_entries_enabled else "DISABLED" }}
+              </span>
+            </div>
+            <div class="control-row">
+              <span>Scale-Ins</span>
+              <span class="badge {% if controls.scale_ins_enabled %}on{% else %}off{% endif %}">
+                {{ "ENABLED" if controls.scale_ins_enabled else "DISABLED" }}
+              </span>
+            </div>
+            <form method="post" action="/update-controls">
+              <div class="control-row">
+                <div class="checkbox-wrap">
+                  <input type="checkbox" id="trading_enabled" name="trading_enabled" {% if controls.trading_enabled %}checked{% endif %}>
+                  <label for="trading_enabled">Trading Enabled</label>
+                </div>
+              </div>
+              <div class="control-row">
+                <div class="checkbox-wrap">
+                  <input type="checkbox" id="new_entries_enabled" name="new_entries_enabled" {% if controls.new_entries_enabled %}checked{% endif %}>
+                  <label for="new_entries_enabled">New Entries Enabled</label>
+                </div>
+              </div>
+              <div class="control-row">
+                <div class="checkbox-wrap">
+                  <input type="checkbox" id="scale_ins_enabled" name="scale_ins_enabled" {% if controls.scale_ins_enabled %}checked{% endif %}>
+                  <label for="scale_ins_enabled">Scale-Ins Enabled</label>
+                </div>
+              </div>
+              <div class="control-row">
+                <label for="prematch_window_hours">Prematch Window Hours</label>
+                <input type="number" id="prematch_window_hours" name="prematch_window_hours" min="0" step="0.5" value="{{ controls.prematch_window_hours }}">
+              </div>
+              <button type="submit">Update Controls</button>
+            </form>
+          </div>
         </div>
 
-        <div class="checkbox">
-          <input type="checkbox" id="new_entries_enabled" name="new_entries_enabled" {% if controls.new_entries_enabled %}checked{% endif %}>
-          <label for="new_entries_enabled">New Entries Enabled</label>
+        <div class="card">
+          <h2>Latest Scan</h2>
+          {% if latest_scan_summary %}
+          <div class="scan-grid">
+            {% for key, value in latest_scan_summary.items() %}
+            <div class="scan-item">
+              <div class="label">{{ key }}</div>
+              <div class="value">
+                {% if value is mapping %}
+                  {{ value | tojson }}
+                {% else %}
+                  {{ value }}
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <div class="empty">No data yet</div>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="card" style="margin-top: 18px;">
+        <h2>Open Positions</h2>
+        {% if open_positions %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Fixture</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th>Entries</th>
+                <th>Shares</th>
+                <th>Avg Price</th>
+                <th>Total Notional</th>
+                <th>Unrealized PnL</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in open_positions %}
+              <tr>
+                <td>{{ row.fixture_id }}</td>
+                <td>{{ row.market_name }}</td>
+                <td>{{ row.side }}</td>
+                <td>{{ row.entries }}</td>
+                <td>{{ "%.2f"|format(row.total_shares or 0) }}</td>
+                <td>{{ "%.4f"|format(row.avg_price or 0) }}</td>
+                <td>{{ "%.2f"|format(row.total_notional or 0) }}</td>
+                <td>
+                  {% if row.unrealized_pnl is none %}
+                    null
+                  {% else %}
+                    <span class="{% if row.unrealized_pnl >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">
+                      {{ "%.2f"|format(row.unrealized_pnl) }}
+                    </span>
+                  {% endif %}
+                </td>
+                <td>{{ row.status }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty">No data yet</div>
+        {% endif %}
+      </div>
+
+      <div class="grid two-col" style="margin-top: 18px;">
+        <div class="card">
+          <h2>Recent Trades</h2>
+          {% if recent_paper_trades %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Fixture</th>
+                  <th>Side</th>
+                  <th>Price</th>
+                  <th>Edge</th>
+                  <th>Notional</th>
+                  <th>Shares</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in recent_paper_trades %}
+                <tr>
+                  <td>{{ row.timestamp }}</td>
+                  <td>{{ row.fixture_id }}</td>
+                  <td>{{ row.side }}</td>
+                  <td>{{ "%.4f"|format(row.entry_price or 0) }}</td>
+                  <td>{{ "%.4f"|format(row.entry_edge or 0) }}</td>
+                  <td>{{ "%.2f"|format(row.notional or 0) }}</td>
+                  <td>{{ "%.2f"|format(row.shares or 0) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="empty">No data yet</div>
+          {% endif %}
         </div>
 
-        <div class="checkbox">
-          <input type="checkbox" id="scale_ins_enabled" name="scale_ins_enabled" {% if controls.scale_ins_enabled %}checked{% endif %}>
-          <label for="scale_ins_enabled">Scale-Ins Enabled</label>
+        <div class="card">
+          <h2>Recent Settlements</h2>
+          {% if recent_paper_settlements %}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Fixture</th>
+                  <th>Side</th>
+                  <th>Settlement</th>
+                  <th>Gross PnL</th>
+                  <th>ROI</th>
+                  <th>Score</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in recent_paper_settlements %}
+                <tr>
+                  <td>{{ row.timestamp }}</td>
+                  <td>{{ row.fixture_id }}</td>
+                  <td>{{ row.side }}</td>
+                  <td>{{ "%.2f"|format(row.settlement_price or 0) }}</td>
+                  <td class="{% if (row.gross_pnl or 0) >= 0 %}pnl-pos{% else %}pnl-neg{% endif %}">{{ "%.2f"|format(row.gross_pnl or 0) }}</td>
+                  <td>{{ "%.4f"|format(row.roi or 0) }}</td>
+                  <td>{{ row.final_score_home }}-{{ row.final_score_away }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="empty">No data yet</div>
+          {% endif %}
         </div>
+      </div>
 
-        <div class="row">
-          <label for="prematch_window_hours">Prematch Window Hours</label>
-          <input
-            type="number"
-            id="prematch_window_hours"
-            name="prematch_window_hours"
-            min="0"
-            step="0.5"
-            value="{{ controls.prematch_window_hours }}"
-          >
+      <div class="card" style="margin-top: 18px;">
+        <h2>Recent Signals</h2>
+        {% if recent_signal_events %}
+        <div class="event-feed">
+          {% for row in recent_signal_events %}
+          <div class="event">
+            <div class="event-meta">
+              <span>{{ row.event_type or "signal_event" }}</span>
+              <span>{{ row.timestamp or "unknown" }}</span>
+            </div>
+            <pre>{{ row.data | tojson(indent=2) if row.data is defined else row | tojson(indent=2) }}</pre>
+          </div>
+          {% endfor %}
         </div>
-
-        <button type="submit">Save Controls</button>
-      </form>
+        {% else %}
+        <div class="empty">No data yet</div>
+        {% endif %}
+      </div>
     </div>
   </body>
 </html>
