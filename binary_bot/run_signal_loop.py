@@ -6,6 +6,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+try:
+    import psycopg  # type: ignore
+except Exception:
+    psycopg = None
+
 from binary_bot.paper_executor import (
     find_open_position,
     maybe_execute_paper_trade,
@@ -28,6 +33,8 @@ INCLUDE_LIVE_FIXTURES = True
 TRADING_ENABLED = os.getenv("TRADING_ENABLED", "true").lower() == "true"
 NEW_ENTRIES_ENABLED = os.getenv("NEW_ENTRIES_ENABLED", "true").lower() == "true"
 SCALE_INS_ENABLED = os.getenv("SCALE_INS_ENABLED", "true").lower() == "true"
+PREMATCH_WINDOW_HOURS = float(os.getenv("PREMATCH_WINDOW_HOURS", "6"))
+DASHBOARD_DATABASE_URL = os.getenv("DASHBOARD_DATABASE_URL", "").strip()
 
 os.makedirs("data/logs", exist_ok=True)
 
@@ -54,6 +61,52 @@ def append_jsonl(path: str, payload: dict) -> None:
             f.write(json.dumps(payload, sort_keys=True) + "\n")
     except Exception:
         pass
+
+
+def load_remote_control_state() -> Dict[str, Any] | None:
+    if not DASHBOARD_DATABASE_URL or psycopg is None:
+        return None
+    try:
+        with psycopg.connect(DASHBOARD_DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        trading_enabled,
+                        new_entries_enabled,
+                        scale_ins_enabled,
+                        prematch_window_hours
+                    FROM bot_control_state
+                    WHERE id = 1
+                    """
+                )
+                row = cur.fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    try:
+        return {
+            "trading_enabled": bool(row[0]),
+            "new_entries_enabled": bool(row[1]),
+            "scale_ins_enabled": bool(row[2]),
+            "prematch_window_hours": float(row[3]),
+        }
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def get_runtime_controls() -> Dict[str, Any]:
+    local_controls = {
+        "trading_enabled": TRADING_ENABLED,
+        "new_entries_enabled": NEW_ENTRIES_ENABLED,
+        "scale_ins_enabled": SCALE_INS_ENABLED,
+        "prematch_window_hours": PREMATCH_WINDOW_HOURS,
+    }
+    remote_controls = load_remote_control_state()
+    if remote_controls is not None:
+        return remote_controls
+    return local_controls
 
 
 def read_fixture_mapping_index() -> List[Dict[str, Any]]:
@@ -253,6 +306,13 @@ def _build_research_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | No
 
 def run_loop() -> None:
     while True:
+        runtime_controls = get_runtime_controls()
+        trading_enabled = bool(runtime_controls.get("trading_enabled", TRADING_ENABLED))
+        new_entries_enabled = bool(runtime_controls.get("new_entries_enabled", NEW_ENTRIES_ENABLED))
+        scale_ins_enabled = bool(runtime_controls.get("scale_ins_enabled", SCALE_INS_ENABLED))
+        prematch_window_hours = float(
+            runtime_controls.get("prematch_window_hours", PREMATCH_WINDOW_HOURS)
+        )
         settlement_summary = settle_open_positions()
         if int(settlement_summary.get("positions_settled", 0) or 0) > 0:
             print(
@@ -287,7 +347,7 @@ def run_loop() -> None:
             is_prematch_eligible = should_scan_fixture(
                 mapping_row=mapping_row,
                 now_utc=now_utc,
-                prematch_window_hours=PREMATCH_WINDOW_HOURS,
+                prematch_window_hours=prematch_window_hours,
             )
             if is_prematch_eligible:
                 fixtures_eligible += 1
@@ -328,16 +388,16 @@ def run_loop() -> None:
             if signal_row.get("action") != "HOLD":
                 sizing_snapshot = size_from_signal_snapshot(signal_row, bankroll=DEFAULT_BANKROLL)
                 execution_result = {"executed": False, "reason": "trading_disabled"}
-                if TRADING_ENABLED:
+                if trading_enabled:
                     open_positions_payload = read_open_positions()
                     existing_position = find_open_position(
                         open_positions_payload,
                         int(signal_row.get("fixture_id")),
                         str(signal_row.get("side") or ""),
                     )
-                    if existing_position is None and not NEW_ENTRIES_ENABLED:
+                    if existing_position is None and not new_entries_enabled:
                         execution_result = {"executed": False, "reason": "new_entries_disabled"}
-                    elif existing_position is not None and not SCALE_INS_ENABLED:
+                    elif existing_position is not None and not scale_ins_enabled:
                         execution_result = {"executed": False, "reason": "scale_ins_disabled"}
                     else:
                         execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
@@ -394,11 +454,11 @@ def run_loop() -> None:
             "live_fixtures_scanned": live_fixtures_scanned,
             "signals_found": signals_found,
             "research_signals_found": research_signals_found,
-            "prematch_window_hours": PREMATCH_WINDOW_HOURS,
+            "prematch_window_hours": prematch_window_hours,
             "include_live_fixtures": INCLUDE_LIVE_FIXTURES,
-            "trading_enabled": TRADING_ENABLED,
-            "new_entries_enabled": NEW_ENTRIES_ENABLED,
-            "scale_ins_enabled": SCALE_INS_ENABLED,
+            "trading_enabled": trading_enabled,
+            "new_entries_enabled": new_entries_enabled,
+            "scale_ins_enabled": scale_ins_enabled,
             "bucket_counts": bucket_counts,
         }
         print(
