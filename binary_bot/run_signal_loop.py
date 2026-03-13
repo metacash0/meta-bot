@@ -77,8 +77,10 @@ def kickoff_bucket(hours_to_kickoff: float) -> str | None:
         return "0_1h"
     if 1.0 <= hours_to_kickoff < 3.0:
         return "1_3h"
-    if 3.0 <= hours_to_kickoff <= 6.0:
+    if 3.0 <= hours_to_kickoff < 6.0:
         return "3_6h"
+    if 6.0 <= hours_to_kickoff <= 24.0:
+        return "6_24h"
     return None
 
 
@@ -251,7 +253,7 @@ def run_loop() -> None:
         research_signals_found = 0
         diagnostic_candidates: List[Dict[str, Any]] = []
         research_candidates: List[Dict[str, Any]] = []
-        bucket_counts = {"0_1h": 0, "1_3h": 0, "3_6h": 0}
+        bucket_counts = {"0_1h": 0, "1_3h": 0, "3_6h": 0, "6_24h": 0}
 
         for mapping_row in mapping_rows:
             hours_to_kickoff = _hours_to_kickoff(mapping_row, now_utc)
