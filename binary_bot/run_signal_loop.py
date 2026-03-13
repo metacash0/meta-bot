@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from shared.market_signal_snapshot import build_market_signal_snapshot
+from shared.order_sizing import size_from_signal_snapshot
 
 
 FIXTURE_MAPPING_INDEX_PATH = "data/fixture_mapping_index.json"
 MARKET_MAP_PATH = "data/market_map.json"
 SCAN_SLEEP_SEC = 10.0
+DEFAULT_BANKROLL = 5000.0
 
 
 def _read_json_rows(path: str, key: str) -> List[Dict[str, Any]]:
@@ -52,7 +54,7 @@ def find_market_row(fixture_id: int, rows: List[Dict[str, Any]]) -> Optional[Dic
 def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) -> Dict[str, Any]:
     fixture_id = int(mapping_row["fixture_id"])
     snapshot = build_market_signal_snapshot(fixture_id=fixture_id)
-    return {
+    signal_row = {
         "timestamp": str(snapshot.get("timestamp", datetime.now(timezone.utc).isoformat()) or datetime.now(timezone.utc).isoformat()),
         "fixture_id": fixture_id,
         "market_name": str(snapshot.get("market_name", mapping_row.get("market_name", market_row.get("name", ""))) or ""),
@@ -77,6 +79,19 @@ def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) ->
         "action": str(snapshot.get("action", "HOLD") or "HOLD"),
         "side": snapshot.get("side"),
     }
+    if signal_row["action"] != "HOLD":
+        sizing = size_from_signal_snapshot(snapshot, bankroll=DEFAULT_BANKROLL)
+        signal_row.update(
+            {
+                "recommended_notional": sizing.get("recommended_notional"),
+                "recommended_shares": sizing.get("recommended_shares"),
+                "reason": sizing.get("reason"),
+                "risk_cap_notional": sizing.get("risk_cap_notional"),
+                "book_cap_notional": sizing.get("book_cap_notional"),
+                "edge_scale": sizing.get("edge_scale"),
+            }
+        )
+    return signal_row
 
 
 def run_loop() -> None:
