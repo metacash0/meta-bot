@@ -6,7 +6,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from binary_bot.paper_executor import maybe_execute_paper_trade
+from binary_bot.paper_executor import (
+    find_open_position,
+    maybe_execute_paper_trade,
+    read_open_positions,
+)
 from binary_bot.paper_settlement import settle_open_positions
 from shared.market_signal_snapshot import build_market_signal_snapshot
 from shared.order_sizing import size_from_signal_snapshot
@@ -21,6 +25,9 @@ DEFAULT_BANKROLL = 5000.0
 PREMATCH_WINDOW_HOURS = float(os.getenv("PREMATCH_WINDOW_HOURS", "6"))
 RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
 INCLUDE_LIVE_FIXTURES = True
+TRADING_ENABLED = os.getenv("TRADING_ENABLED", "true").lower() == "true"
+NEW_ENTRIES_ENABLED = os.getenv("NEW_ENTRIES_ENABLED", "true").lower() == "true"
+SCALE_INS_ENABLED = os.getenv("SCALE_INS_ENABLED", "true").lower() == "true"
 
 os.makedirs("data/logs", exist_ok=True)
 
@@ -320,7 +327,20 @@ def run_loop() -> None:
                 research_signals_found += 1
             if signal_row.get("action") != "HOLD":
                 sizing_snapshot = size_from_signal_snapshot(signal_row, bankroll=DEFAULT_BANKROLL)
-                execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
+                execution_result = {"executed": False, "reason": "trading_disabled"}
+                if TRADING_ENABLED:
+                    open_positions_payload = read_open_positions()
+                    existing_position = find_open_position(
+                        open_positions_payload,
+                        int(signal_row.get("fixture_id")),
+                        str(signal_row.get("side") or ""),
+                    )
+                    if existing_position is None and not NEW_ENTRIES_ENABLED:
+                        execution_result = {"executed": False, "reason": "new_entries_disabled"}
+                    elif existing_position is not None and not SCALE_INS_ENABLED:
+                        execution_result = {"executed": False, "reason": "scale_ins_disabled"}
+                    else:
+                        execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
                 signal_event = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "fixture_id": signal_row.get("fixture_id"),
@@ -376,6 +396,9 @@ def run_loop() -> None:
             "research_signals_found": research_signals_found,
             "prematch_window_hours": PREMATCH_WINDOW_HOURS,
             "include_live_fixtures": INCLUDE_LIVE_FIXTURES,
+            "trading_enabled": TRADING_ENABLED,
+            "new_entries_enabled": NEW_ENTRIES_ENABLED,
+            "scale_ins_enabled": SCALE_INS_ENABLED,
             "bucket_counts": bucket_counts,
         }
         print(
