@@ -71,14 +71,14 @@ def evaluate_home_win_market(
     yes_edge = home_yes_fair - yes_mid if yes_mid is not None else None
     no_edge = home_no_fair - no_mid if no_mid is not None else None
     yes_required_edge = (
-        max(effective_min_edge, base_edge_floor + cost_buffer + spread_multiplier * yes_spread)
+        base_edge_floor + cost_buffer + spread_multiplier * yes_spread
         if yes_spread is not None
-        else effective_min_edge
+        else base_edge_floor + cost_buffer
     )
     no_required_edge = (
-        max(effective_min_edge, base_edge_floor + cost_buffer + spread_multiplier * no_spread)
+        base_edge_floor + cost_buffer + spread_multiplier * no_spread
         if no_spread is not None
-        else effective_min_edge
+        else base_edge_floor + cost_buffer
     )
     yes_tradable = (
         yes_spread is not None
@@ -149,11 +149,11 @@ if __name__ == "__main__":
                     "fixture_id": 1,
                     "home_team": "Home A",
                     "away_team": "Away A",
-                    "home_yes_fair": 0.528,
-                    "home_no_fair": 0.472,
+                    "home_yes_fair": 0.540,
+                    "home_no_fair": 0.460,
                 },
-                "yes_bid": 0.50,
-                "yes_ask": 0.502,
+                "yes_bid": 0.495,
+                "yes_ask": 0.505,
                 "yes_ask_size": 100.0,
                 "min_edge": 0.03,
             },
@@ -165,11 +165,11 @@ if __name__ == "__main__":
                     "fixture_id": 2,
                     "home_team": "Home B",
                     "away_team": "Away B",
-                    "home_yes_fair": 0.528,
-                    "home_no_fair": 0.472,
+                    "home_yes_fair": 0.555,
+                    "home_no_fair": 0.445,
                 },
-                "yes_bid": 0.48,
-                "yes_ask": 0.50,
+                "yes_bid": 0.49,
+                "yes_ask": 0.525,
                 "yes_ask_size": 100.0,
                 "min_edge": 0.03,
             },
