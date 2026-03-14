@@ -409,6 +409,63 @@
       </div>
 
       <div class="card" style="margin-top: 18px;">
+        <h2>Top Ranked Opportunities</h2>
+        <div class="muted" style="margin-bottom: 12px;">Most recent ranked trade candidates before execution filtering</div>
+        {% set ranked_candidates = ranked_candidates_snapshot.candidates if ranked_candidates_snapshot and ranked_candidates_snapshot.candidates is defined else [] %}
+        {% if ranked_candidates %}
+        <div class="muted" style="margin-bottom: 12px;">Snapshot time: {{ ranked_candidates_snapshot.timestamp or "unknown" }}</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>League</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th>Edge</th>
+                <th>Priority Score</th>
+                <th>Recommended Notional</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in ranked_candidates %}
+              <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ row.league or "" }}</td>
+                <td>{{ row.market_name or "" }}</td>
+                <td>{{ row.side or "" }}</td>
+                <td>
+                  {% if row.edge is number %}
+                    {{ "%.2f%%"|format((row.edge or 0) * 100) }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>
+                  {% if row.priority_score is number %}
+                    {{ "%.2f"|format(row.priority_score or 0) }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+                <td>
+                  {% if row.recommended_notional is number %}
+                    ${{ "%.2f"|format(row.recommended_notional or 0) }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty">No ranked opportunities yet</div>
+        {% endif %}
+      </div>
+
+      <div class="card" style="margin-top: 18px;">
         <h2>Open Positions</h2>
         {% if open_positions %}
         <div class="table-wrap">

@@ -128,6 +128,23 @@ def read_jsonl_tail(path: Path, limit: int = 10) -> List[dict]:
     return rows[-limit:]
 
 
+def extract_latest_ranked_candidates(rows: Iterable[dict]) -> dict:
+    latest: dict = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("event_type", "") or "") != "ranked_candidates":
+            continue
+        candidates = row.get("candidates", [])
+        if not isinstance(candidates, list):
+            candidates = []
+        latest = {
+            "timestamp": row.get("timestamp"),
+            "candidates": [item for item in candidates if isinstance(item, dict)],
+        }
+    return latest
+
+
 def sum_open_positions(positions_payload: dict) -> dict:
     positions = positions_payload.get("positions", []) if isinstance(positions_payload, dict) else []
     open_positions = 0
@@ -347,7 +364,9 @@ def index() -> str:
     latest_scan_summary = latest_scan_rows[-1] if latest_scan_rows else {}
     recent_paper_trades = list(reversed(read_jsonl_tail(PAPER_TRADES_PATH, limit=10)))
     recent_paper_settlements = list(reversed(read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10)))
-    recent_signal_events = list(reversed(read_jsonl_tail(SIGNAL_EVENTS_PATH, limit=10)))
+    signal_event_rows = read_jsonl_tail(SIGNAL_EVENTS_PATH, limit=200)
+    recent_signal_events = list(reversed(signal_event_rows[-10:]))
+    ranked_candidates_snapshot = extract_latest_ranked_candidates(signal_event_rows)
     all_settlement_rows = read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10000)
     realized_pnl_summary = sum_realized_pnl(all_settlement_rows)
     risk_snapshot = build_risk_snapshot(open_positions_payload, all_settlement_rows)
@@ -362,6 +381,7 @@ def index() -> str:
         recent_paper_trades=recent_paper_trades,
         recent_paper_settlements=recent_paper_settlements,
         recent_signal_events=recent_signal_events,
+        ranked_candidates_snapshot=ranked_candidates_snapshot,
         realized_pnl_summary=realized_pnl_summary,
         risk_summary=risk_summary,
     )
