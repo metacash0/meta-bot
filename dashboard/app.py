@@ -146,6 +146,107 @@ def extract_latest_ranked_candidates(rows: Iterable[dict]) -> dict:
     return latest
 
 
+def format_bucket_counts(bucket_counts: Any) -> List[dict]:
+    if not isinstance(bucket_counts, dict):
+        return []
+    label_map = {
+        "0_1h": "0-1h",
+        "1_3h": "1-3h",
+        "3_6h": "3-6h",
+        "6_24h": "6-24h",
+    }
+    rows: List[dict] = []
+    for key in ("0_1h", "1_3h", "3_6h", "6_24h"):
+        try:
+            count = int(bucket_counts.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            count = 0
+        rows.append({"label": label_map[key], "count": count})
+    return rows
+
+
+def format_scan_timestamp(value: Any) -> str:
+    dt = _parse_utc_datetime(value)
+    if dt is None:
+        return str(value or "")
+    return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def build_latest_scan_cards(scan_summary: dict) -> List[dict]:
+    if not isinstance(scan_summary, dict):
+        return []
+    cards: List[dict] = []
+    for key in (
+        "fixtures_eligible",
+        "fixtures_scanned",
+        "live_fixtures_scanned",
+        "signals_found",
+        "research_signals_found",
+        "prematch_window_hours",
+        "trading_enabled",
+        "new_entries_enabled",
+        "scale_ins_enabled",
+        "include_live_fixtures",
+    ):
+        if key in scan_summary:
+            cards.append({"label": key, "value": scan_summary.get(key)})
+    return cards
+
+
+def _decision_edge(row: dict) -> float | None:
+    side = str(row.get("side", "") or "").upper()
+    try:
+        if "edge" in row and row.get("edge") is not None:
+            return float(row.get("edge"))
+        if side == "YES" and row.get("yes_edge") is not None:
+            return float(row.get("yes_edge"))
+        if side == "NO" and row.get("no_edge") is not None:
+            return float(row.get("no_edge"))
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def load_decision_audit(signal_event_rows: Iterable[dict], limit: int = 10) -> List[dict]:
+    decisions: List[dict] = []
+    for row in signal_event_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "buy_signal":
+            continue
+        data = row.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        if data.get("executed") is not True:
+            continue
+        decisions.append(
+            {
+                "timestamp": data.get("timestamp") or row.get("timestamp"),
+                "league": data.get("league"),
+                "market_name": data.get("market_name"),
+                "fixture_id": data.get("fixture_id"),
+                "side": data.get("side"),
+                "execution_reason": data.get("execution_reason"),
+                "entry_mode": data.get("entry_mode"),
+                "edge": _decision_edge(data),
+                "rank_at_decision": data.get("rank_at_decision"),
+                "was_top_ranked": data.get("was_top_ranked"),
+                "candidate_count": data.get("candidate_count"),
+                "priority_score": data.get("priority_score"),
+                "recommended_notional": data.get("recommended_notional"),
+                "ask_price": data.get("ask_price"),
+                "spread": data.get("spread"),
+                "minute": data.get("minute"),
+                "status": data.get("status"),
+                "minute_bucket": data.get("minute_bucket"),
+                "projected_open_total_notional_after": data.get("projected_open_total_notional_after"),
+            }
+        )
+    decisions.sort(
+        key=lambda row: _parse_utc_datetime(row.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return decisions[:limit]
+
+
 def build_signal_quality_summary(
     signal_event_rows: Iterable[dict],
     paper_trade_rows: Iterable[dict],
@@ -441,6 +542,10 @@ def index() -> str:
     risk_snapshot = build_risk_snapshot(open_positions_payload, all_settlement_rows)
     risk_summary = build_risk_summary(risk_snapshot)
     signal_quality_summary = build_signal_quality_summary(signal_event_rows, paper_trade_rows)
+    latest_scan_cards = build_latest_scan_cards(latest_scan_summary)
+    latest_scan_bucket_counts = format_bucket_counts(latest_scan_summary.get("bucket_counts"))
+    latest_scan_timestamp = format_scan_timestamp(latest_scan_summary.get("timestamp"))
+    decision_audit_rows = load_decision_audit(signal_event_rows, limit=15)
 
     return render_template(
         "index.html",
@@ -455,6 +560,10 @@ def index() -> str:
         realized_pnl_summary=realized_pnl_summary,
         risk_summary=risk_summary,
         signal_quality_summary=signal_quality_summary,
+        latest_scan_cards=latest_scan_cards,
+        latest_scan_bucket_counts=latest_scan_bucket_counts,
+        latest_scan_timestamp=latest_scan_timestamp,
+        decision_audit_rows=decision_audit_rows,
     )
 
 

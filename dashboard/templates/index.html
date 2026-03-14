@@ -219,6 +219,17 @@
         word-break: break-word;
         color: #d6def7;
       }
+      .mini-list {
+        display: grid;
+        gap: 6px;
+      }
+      .mini-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--text);
+        font-size: 13px;
+      }
       .empty {
         color: var(--muted);
         padding: 12px 0;
@@ -424,18 +435,31 @@
           <h2>Latest Scan</h2>
           {% if latest_scan_summary %}
           <div class="scan-grid">
-            {% for key, value in latest_scan_summary.items() %}
             <div class="scan-item">
-              <div class="label">{{ key }}</div>
-              <div class="value">
-                {% if value is mapping %}
-                  {{ value | tojson }}
-                {% else %}
-                  {{ value }}
-                {% endif %}
-              </div>
+              <div class="label">timestamp</div>
+              <div class="value">{{ latest_scan_timestamp }}</div>
+            </div>
+            {% for row in latest_scan_cards %}
+            <div class="scan-item">
+              <div class="label">{{ row.label }}</div>
+              <div class="value">{{ row.value }}</div>
             </div>
             {% endfor %}
+            <div class="scan-item">
+              <div class="label">bucket_counts</div>
+              {% if latest_scan_bucket_counts %}
+              <div class="mini-list">
+                {% for bucket in latest_scan_bucket_counts %}
+                <div class="mini-row">
+                  <span>{{ bucket.label }}</span>
+                  <span>{{ bucket.count }}</span>
+                </div>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="value">No data</div>
+              {% endif %}
+            </div>
           </div>
           {% else %}
           <div class="empty">No data yet</div>
@@ -497,6 +521,67 @@
         </div>
         {% else %}
         <div class="empty">No ranked opportunities yet</div>
+        {% endif %}
+      </div>
+
+      <div class="card" style="margin-top: 18px;">
+        <h2>Decision Audit</h2>
+        <div class="muted" style="margin-bottom: 12px;">Recent executed decisions with sizing and ranking context</div>
+        {% if decision_audit_rows %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>League</th>
+                <th>Market</th>
+                <th>Fixture</th>
+                <th>Side</th>
+                <th>Reason</th>
+                <th>Mode</th>
+                <th>Edge</th>
+                <th>Rank</th>
+                <th>Top</th>
+                <th>Candidates</th>
+                <th>Priority</th>
+                <th>Notional</th>
+                <th>Ask</th>
+                <th>Spread</th>
+                <th>Minute</th>
+                <th>Status</th>
+                <th>Minute Bucket</th>
+                <th>Projected Open Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in decision_audit_rows %}
+              <tr>
+                <td>{{ row.timestamp or "" }}</td>
+                <td>{{ row.league or "" }}</td>
+                <td>{{ row.market_name or "" }}</td>
+                <td>{{ row.fixture_id or "" }}</td>
+                <td>{{ row.side or "" }}</td>
+                <td>{{ row.execution_reason or "" }}</td>
+                <td>{{ row.entry_mode or "" }}</td>
+                <td>{% if row.edge is not none %}{{ "%.2f%%"|format(row.edge * 100) }}{% else %}-{% endif %}</td>
+                <td>{{ row.rank_at_decision if row.rank_at_decision is not none else "-" }}</td>
+                <td>{{ "Yes" if row.was_top_ranked else "No" }}</td>
+                <td>{{ row.candidate_count if row.candidate_count is not none else "-" }}</td>
+                <td>{% if row.priority_score is not none %}{{ "%.2f"|format(row.priority_score) }}{% else %}-{% endif %}</td>
+                <td>{% if row.recommended_notional is not none %}${{ "%.2f"|format(row.recommended_notional) }}{% else %}-{% endif %}</td>
+                <td>{% if row.ask_price is not none %}{{ "%.4f"|format(row.ask_price) }}{% else %}-{% endif %}</td>
+                <td>{% if row.spread is not none %}{{ "%.2f%%"|format(row.spread * 100) }}{% else %}-{% endif %}</td>
+                <td>{{ row.minute if row.minute is not none else "-" }}</td>
+                <td>{{ row.status or "" }}</td>
+                <td>{{ row.minute_bucket or "" }}</td>
+                <td>{% if row.projected_open_total_notional_after is not none %}${{ "%.2f"|format(row.projected_open_total_notional_after) }}{% else %}-{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty">No data yet</div>
         {% endif %}
       </div>
 
