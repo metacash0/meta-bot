@@ -226,6 +226,75 @@ def check_risk_limits(signal_row: dict, risk_snapshot: dict) -> str | None:
     return None
 
 
+def clone_risk_snapshot(risk_snapshot: dict) -> dict:
+    open_payload = risk_snapshot.get("_open_positions_payload", {"positions": []})
+    positions = open_payload.get("positions", []) if isinstance(open_payload, dict) else []
+    return {
+        "open_positions": int(risk_snapshot.get("open_positions", 0) or 0),
+        "open_total_notional": float(risk_snapshot.get("open_total_notional", 0.0) or 0.0),
+        "per_fixture_notional": dict(risk_snapshot.get("per_fixture_notional", {}) or {}),
+        "per_league_notional": dict(risk_snapshot.get("per_league_notional", {}) or {}),
+        "today_realized_pnl": float(risk_snapshot.get("today_realized_pnl", 0.0) or 0.0),
+        "_open_positions_payload": {
+            "positions": [dict(row) for row in positions if isinstance(row, dict)],
+        },
+    }
+
+
+def apply_execution_to_risk_snapshot(
+    risk_snapshot: dict,
+    signal_row: dict,
+    proposed_notional: float,
+    is_new_position: bool,
+) -> None:
+    try:
+        notional = float(proposed_notional or 0.0)
+    except (TypeError, ValueError):
+        notional = 0.0
+    if notional <= 0.0:
+        return
+
+    risk_snapshot["open_total_notional"] = float(risk_snapshot.get("open_total_notional", 0.0) or 0.0) + notional
+    if is_new_position:
+        risk_snapshot["open_positions"] = int(risk_snapshot.get("open_positions", 0) or 0) + 1
+
+    fixture_key = str(signal_row.get("fixture_id", "") or "")
+    per_fixture_notional = risk_snapshot.setdefault("per_fixture_notional", {})
+    if fixture_key:
+        per_fixture_notional[fixture_key] = float(per_fixture_notional.get(fixture_key, 0.0) or 0.0) + notional
+
+    league_key = str(signal_row.get("league", "") or "")
+    per_league_notional = risk_snapshot.setdefault("per_league_notional", {})
+    if league_key:
+        per_league_notional[league_key] = float(per_league_notional.get(league_key, 0.0) or 0.0) + notional
+
+    open_payload = risk_snapshot.setdefault("_open_positions_payload", {"positions": []})
+    positions = open_payload.setdefault("positions", [])
+    existing_position = find_open_position(
+        open_payload,
+        int(signal_row.get("fixture_id")),
+        str(signal_row.get("side") or ""),
+    )
+    if existing_position is None and is_new_position:
+        positions.append(
+            {
+                "fixture_id": signal_row.get("fixture_id"),
+                "market_name": signal_row.get("market_name"),
+                "league": signal_row.get("league"),
+                "side": signal_row.get("side"),
+                "status": "open",
+                "position_total_notional": notional,
+                "total_notional": notional,
+            }
+        )
+    elif existing_position is not None:
+        updated_total = float(
+            existing_position.get("position_total_notional", existing_position.get("total_notional", 0.0)) or 0.0
+        ) + notional
+        existing_position["position_total_notional"] = updated_total
+        existing_position["total_notional"] = updated_total
+
+
 def load_remote_control_state() -> Dict[str, Any] | None:
     if not DASHBOARD_DATABASE_URL or psycopg is None:
         return None
@@ -491,6 +560,7 @@ def run_loop() -> None:
                 )
             )
         risk_snapshot = build_risk_snapshot()
+        projected_risk_snapshot = clone_risk_snapshot(risk_snapshot)
         mapping_rows = read_fixture_mapping_index()
         market_rows = read_market_map()
         now_utc = datetime.now(timezone.utc)
@@ -555,7 +625,10 @@ def run_loop() -> None:
                 signal_row["recommended_shares"] = sizing_snapshot.get("recommended_shares")
                 execution_result = {"executed": False, "reason": "trading_disabled"}
                 if trading_enabled:
-                    open_positions_payload = read_open_positions()
+                    open_positions_payload = projected_risk_snapshot.get(
+                        "_open_positions_payload",
+                        {"positions": []},
+                    )
                     existing_position = find_open_position(
                         open_positions_payload,
                         int(signal_row.get("fixture_id")),
@@ -566,11 +639,18 @@ def run_loop() -> None:
                     elif existing_position is not None and not scale_ins_enabled:
                         execution_result = {"executed": False, "reason": "scale_ins_disabled"}
                     else:
-                        risk_block_reason = check_risk_limits(signal_row, risk_snapshot)
+                        risk_block_reason = check_risk_limits(signal_row, projected_risk_snapshot)
                         if risk_block_reason is not None:
                             execution_result = {"executed": False, "reason": risk_block_reason}
                         else:
                             execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
+                            if execution_result.get("executed") is True:
+                                apply_execution_to_risk_snapshot(
+                                    projected_risk_snapshot,
+                                    signal_row,
+                                    float(sizing_snapshot.get("recommended_notional", 0.0) or 0.0),
+                                    existing_position is None,
+                                )
                 signal_event = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "fixture_id": signal_row.get("fixture_id"),
@@ -594,6 +674,10 @@ def run_loop() -> None:
                     "executed": execution_result.get("executed"),
                     "execution_reason": execution_result.get("reason"),
                 }
+                if execution_result.get("executed") is True:
+                    signal_event["projected_open_total_notional_after"] = float(
+                        projected_risk_snapshot.get("open_total_notional", 0.0) or 0.0
+                    )
                 print(json.dumps(signal_event, sort_keys=True))
                 append_jsonl(
                     SIGNAL_LOG_PATH,
@@ -636,9 +720,9 @@ def run_loop() -> None:
                 "max_open_positions": MAX_OPEN_POSITIONS,
                 "max_per_league_notional": MAX_PER_LEAGUE_NOTIONAL,
                 "daily_realized_loss_stop": DAILY_REALIZED_LOSS_STOP,
-                "open_positions": int(risk_snapshot.get("open_positions", 0) or 0),
-                "open_total_notional": float(risk_snapshot.get("open_total_notional", 0.0) or 0.0),
-                "today_realized_pnl": float(risk_snapshot.get("today_realized_pnl", 0.0) or 0.0),
+                "open_positions": int(projected_risk_snapshot.get("open_positions", 0) or 0),
+                "open_total_notional": float(projected_risk_snapshot.get("open_total_notional", 0.0) or 0.0),
+                "today_realized_pnl": float(projected_risk_snapshot.get("today_realized_pnl", 0.0) or 0.0),
             },
         }
         print(
