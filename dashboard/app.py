@@ -20,6 +20,7 @@ SCAN_SUMMARY_PATH = BASE_DIR / "data" / "logs" / "scan_summary.jsonl"
 SIGNAL_EVENTS_PATH = BASE_DIR / "data" / "logs" / "signal_events.jsonl"
 PAPER_TRADES_PATH = BASE_DIR / "data" / "logs" / "paper_trades.jsonl"
 PAPER_SETTLEMENTS_PATH = BASE_DIR / "data" / "logs" / "paper_settlements.jsonl"
+RANKED_CANDIDATES_HISTORY_PATH = BASE_DIR / "data" / "ranked_candidates_history.jsonl"
 MAX_TOTAL_OPEN_NOTIONAL = 300.0
 MAX_PER_FIXTURE_NOTIONAL = 200.0
 MAX_OPEN_POSITIONS = 5
@@ -143,6 +144,72 @@ def extract_latest_ranked_candidates(rows: Iterable[dict]) -> dict:
             "candidates": [item for item in candidates if isinstance(item, dict)],
         }
     return latest
+
+
+def build_signal_quality_summary(
+    signal_event_rows: Iterable[dict],
+    paper_trade_rows: Iterable[dict],
+) -> dict:
+    today_utc = datetime.now(timezone.utc).date()
+    executed_entry_count = 0
+    blocked_by_risk = 0
+    blocked_by_liquidity = 0
+    blocked_by_below_min_notional = 0
+    blocked_by_scale_in_guard = 0
+    executed_edges: List[float] = []
+    executed_priority_scores: List[float] = []
+
+    for row in paper_trade_rows:
+        if not isinstance(row, dict):
+            continue
+        event_dt = _parse_utc_datetime(row.get("timestamp"))
+        if event_dt is None or event_dt.date() != today_utc:
+            continue
+        executed_entry_count += 1
+        try:
+            executed_edges.append(float(row.get("entry_edge", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pass
+        try:
+            executed_priority_scores.append(float(row.get("priority_score", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pass
+
+    for row in signal_event_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "buy_signal":
+            continue
+        event_dt = _parse_utc_datetime(row.get("timestamp"))
+        if event_dt is None or event_dt.date() != today_utc:
+            continue
+        data = row.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        execution_reason = str(data.get("execution_reason", "") or "")
+        sizing_reason = str(data.get("sizing_reason", "") or "")
+        if execution_reason.startswith("risk_limit_"):
+            blocked_by_risk += 1
+        if execution_reason == "scale_in_edge_not_improved":
+            blocked_by_scale_in_guard += 1
+        if execution_reason == "below_min_notional" or sizing_reason == "below_min_notional":
+            blocked_by_below_min_notional += 1
+        if execution_reason in {"missing_price", "missing_size"} or sizing_reason in {"missing_price", "missing_size"}:
+            blocked_by_liquidity += 1
+
+    return {
+        "today_executed_entry_count": executed_entry_count,
+        "today_blocked_by_risk_count": blocked_by_risk,
+        "today_blocked_by_liquidity_count": blocked_by_liquidity,
+        "today_blocked_by_below_min_notional_count": blocked_by_below_min_notional,
+        "today_blocked_by_scale_in_guard_count": blocked_by_scale_in_guard,
+        "avg_edge_executed_entries_today": (
+            sum(executed_edges) / len(executed_edges) if executed_edges else 0.0
+        ),
+        "avg_priority_score_executed_entries_today": (
+            sum(executed_priority_scores) / len(executed_priority_scores)
+            if executed_priority_scores
+            else 0.0
+        ),
+    }
 
 
 def sum_open_positions(positions_payload: dict) -> dict:
@@ -364,13 +431,16 @@ def index() -> str:
     latest_scan_summary = latest_scan_rows[-1] if latest_scan_rows else {}
     recent_paper_trades = list(reversed(read_jsonl_tail(PAPER_TRADES_PATH, limit=10)))
     recent_paper_settlements = list(reversed(read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10)))
-    signal_event_rows = read_jsonl_tail(SIGNAL_EVENTS_PATH, limit=200)
+    signal_event_rows = read_jsonl_tail(SIGNAL_EVENTS_PATH, limit=2000)
     recent_signal_events = list(reversed(signal_event_rows[-10:]))
-    ranked_candidates_snapshot = extract_latest_ranked_candidates(signal_event_rows)
+    ranked_candidate_rows = read_jsonl_tail(RANKED_CANDIDATES_HISTORY_PATH, limit=500)
+    ranked_candidates_snapshot = extract_latest_ranked_candidates(ranked_candidate_rows)
+    paper_trade_rows = read_jsonl_tail(PAPER_TRADES_PATH, limit=5000)
     all_settlement_rows = read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10000)
     realized_pnl_summary = sum_realized_pnl(all_settlement_rows)
     risk_snapshot = build_risk_snapshot(open_positions_payload, all_settlement_rows)
     risk_summary = build_risk_summary(risk_snapshot)
+    signal_quality_summary = build_signal_quality_summary(signal_event_rows, paper_trade_rows)
 
     return render_template(
         "index.html",
@@ -384,6 +454,7 @@ def index() -> str:
         ranked_candidates_snapshot=ranked_candidates_snapshot,
         realized_pnl_summary=realized_pnl_summary,
         risk_summary=risk_summary,
+        signal_quality_summary=signal_quality_summary,
     )
 
 

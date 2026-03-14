@@ -99,6 +99,20 @@ def _trade_log_row(
         "position_avg_price": float(position.get("avg_price", 0.0)),
         "match_status": str(status) if status is not None else None,
         "match_minute": minute_val,
+        "rank_at_decision": signal_snapshot.get("rank_at_decision"),
+        "priority_score": signal_snapshot.get("priority_score"),
+        "edge_bucket": signal_snapshot.get("edge_bucket"),
+        "minute_bucket": signal_snapshot.get("minute_bucket"),
+        "is_live": signal_snapshot.get("is_live"),
+        "is_prematch": signal_snapshot.get("is_prematch"),
+        "spread": signal_snapshot.get("spread"),
+        "ask_price": signal_snapshot.get("ask_price"),
+        "ask_size": signal_snapshot.get("ask_size"),
+        "candidate_count": signal_snapshot.get("candidate_count"),
+        "was_top_ranked": signal_snapshot.get("was_top_ranked"),
+        "entry_mode": execution_reason,
+        "projected_open_total_notional_after": signal_snapshot.get("projected_open_total_notional_after"),
+        "projected_open_positions_after": signal_snapshot.get("projected_open_positions_after"),
     }
 
 
@@ -156,6 +170,11 @@ def maybe_execute_paper_trade(
             "opened_at": now_iso,
             "updated_at": now_iso,
             "status": "open",
+            "entry_rank_at_decision": signal_snapshot.get("rank_at_decision"),
+            "entry_priority_score": signal_snapshot.get("priority_score"),
+            "entry_edge": float(entry_edge),
+            "entry_edge_bucket": signal_snapshot.get("edge_bucket"),
+            "entry_mode": "new_entry",
         }
         positions.append(new_position)
         write_open_positions({"positions": positions})
@@ -209,6 +228,11 @@ def maybe_execute_paper_trade(
     open_position["avg_price"] = float(new_total_notional / new_total_shares) if new_total_shares > 0.0 else 0.0
     open_position["last_entry_edge"] = float(entry_edge)
     open_position["updated_at"] = now_iso
+    open_position["entry_rank_at_decision"] = signal_snapshot.get("rank_at_decision")
+    open_position["entry_priority_score"] = signal_snapshot.get("priority_score")
+    open_position["entry_edge"] = float(entry_edge)
+    open_position["entry_edge_bucket"] = signal_snapshot.get("edge_bucket")
+    open_position["entry_mode"] = "scale_in"
 
     write_open_positions({"positions": positions})
     append_jsonl(

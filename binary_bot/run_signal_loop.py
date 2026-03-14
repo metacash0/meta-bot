@@ -25,6 +25,7 @@ FIXTURE_MAPPING_INDEX_PATH = "data/fixture_mapping_index.json"
 MARKET_MAP_PATH = "data/market_map.json"
 SCAN_LOG_PATH = "data/logs/scan_summary.jsonl"
 SIGNAL_LOG_PATH = "data/logs/signal_events.jsonl"
+RANKED_CANDIDATES_HISTORY_PATH = "data/ranked_candidates_history.jsonl"
 SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
 RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
@@ -312,6 +313,44 @@ def compute_priority_score(signal_row: dict) -> float:
     if edge <= 0.0 or recommended_notional <= 0.0:
         return 0.0
     return edge * recommended_notional
+
+
+def is_live_status(status: Any) -> bool:
+    return str(status or "").upper() in {"1H", "HT", "2H"}
+
+
+def edge_bucket(edge_value: Any) -> str | None:
+    try:
+        edge = float(edge_value)
+    except (TypeError, ValueError):
+        return None
+    if edge < 0.02:
+        return "lt_2pct"
+    if edge < 0.04:
+        return "2_to_4pct"
+    if edge < 0.06:
+        return "4_to_6pct"
+    return "ge_6pct"
+
+
+def minute_bucket(minute_value: Any, live_flag: bool) -> str:
+    if not live_flag:
+        return "prematch"
+    try:
+        minute = int(minute_value or 0)
+    except (TypeError, ValueError):
+        minute = 0
+    if minute <= 15:
+        return "0_15"
+    if minute <= 30:
+        return "16_30"
+    if minute <= 45:
+        return "31_45"
+    if minute <= 60:
+        return "46_60"
+    if minute <= 75:
+        return "61_75"
+    return "76_plus"
 
 
 def load_remote_control_state() -> Dict[str, Any] | None:
@@ -654,8 +693,15 @@ def run_loop() -> None:
                         priority_score = compute_priority_score(signal_row)
                         if side == "YES":
                             edge_value = signal_row.get("yes_edge")
+                            spread_value = signal_row.get("yes_spread")
+                            ask_price = signal_row.get("yes_ask")
+                            ask_size = signal_row.get("yes_ask_size")
                         else:
                             edge_value = signal_row.get("no_edge")
+                            spread_value = signal_row.get("no_spread")
+                            ask_price = signal_row.get("no_ask")
+                            ask_size = signal_row.get("no_ask_size")
+                        live_flag = is_live_status(signal_row.get("status"))
                         execution_candidates.append(
                             {
                                 "signal_row": dict(signal_row),
@@ -667,6 +713,12 @@ def run_loop() -> None:
                                 "edge": edge_value,
                                 "timestamp": signal_row.get("timestamp"),
                                 "priority_score": priority_score,
+                                "spread": spread_value,
+                                "ask_price": ask_price,
+                                "ask_size": ask_size,
+                                "minute": signal_row.get("minute"),
+                                "status": signal_row.get("status"),
+                                "is_live": live_flag,
                                 "mapping_row": dict(mapping_row),
                                 "market_row": dict(market_row),
                             }
@@ -680,28 +732,31 @@ def run_loop() -> None:
             ),
             reverse=True,
         )
-        print(
-            json.dumps(
+        ranked_candidates_payload = {
+            "event_type": "ranked_candidates",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "candidate_count": len(execution_candidates),
+            "candidates": [
                 {
-                    "event_type": "ranked_candidates",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "candidates": [
-                        {
-                            "fixture_id": row.get("fixture_id"),
-                            "league": row.get("league"),
-                            "market_name": row.get("market_name"),
-                            "side": row.get("side"),
-                            "priority_score": row.get("priority_score"),
-                            "recommended_notional": row.get("recommended_notional"),
-                            "edge": row.get("edge"),
-                        }
-                        for row in execution_candidates[:10]
-                    ],
-                },
-                sort_keys=True,
-            )
-        )
-        for candidate in execution_candidates:
+                    "rank": index + 1,
+                    "fixture_id": row.get("fixture_id"),
+                    "market_name": row.get("market_name"),
+                    "league": row.get("league"),
+                    "side": row.get("side"),
+                    "edge": row.get("edge"),
+                    "priority_score": row.get("priority_score"),
+                    "recommended_notional": row.get("recommended_notional"),
+                    "minute": row.get("minute"),
+                    "status": row.get("status"),
+                    "spread": row.get("spread"),
+                    "is_live": row.get("is_live"),
+                }
+                for index, row in enumerate(execution_candidates[:10])
+            ],
+        }
+        print(json.dumps(ranked_candidates_payload, sort_keys=True))
+        append_jsonl(RANKED_CANDIDATES_HISTORY_PATH, ranked_candidates_payload)
+        for current_rank, candidate in enumerate(execution_candidates, start=1):
             try:
                 refreshed_signal_row = build_signal_row(candidate["mapping_row"], candidate["market_row"])
             except Exception:
@@ -726,6 +781,33 @@ def run_loop() -> None:
             if refreshed_notional <= 0.0:
                 continue
 
+            live_flag = is_live_status(refreshed_signal_row.get("status"))
+            if refreshed_side == "YES":
+                relevant_edge = refreshed_signal_row.get("yes_edge")
+                relevant_spread = refreshed_signal_row.get("yes_spread")
+                relevant_ask_price = refreshed_signal_row.get("yes_ask")
+                relevant_ask_size = refreshed_signal_row.get("yes_ask_size")
+            else:
+                relevant_edge = refreshed_signal_row.get("no_edge")
+                relevant_spread = refreshed_signal_row.get("no_spread")
+                relevant_ask_price = refreshed_signal_row.get("no_ask")
+                relevant_ask_size = refreshed_signal_row.get("no_ask_size")
+
+            refreshed_signal_row["rank_at_decision"] = current_rank
+            refreshed_signal_row["priority_score"] = priority_score
+            refreshed_signal_row["edge_bucket"] = edge_bucket(relevant_edge)
+            refreshed_signal_row["minute_bucket"] = minute_bucket(
+                refreshed_signal_row.get("minute"),
+                live_flag,
+            )
+            refreshed_signal_row["is_live"] = live_flag
+            refreshed_signal_row["is_prematch"] = not live_flag
+            refreshed_signal_row["spread"] = relevant_spread
+            refreshed_signal_row["ask_price"] = relevant_ask_price
+            refreshed_signal_row["ask_size"] = relevant_ask_size
+            refreshed_signal_row["candidate_count"] = len(execution_candidates)
+            refreshed_signal_row["was_top_ranked"] = current_rank == 1
+
             execution_result = {"executed": False, "reason": "trading_disabled"}
             existing_position = None
             if trading_enabled:
@@ -747,6 +829,15 @@ def run_loop() -> None:
                     if risk_block_reason is not None:
                         execution_result = {"executed": False, "reason": risk_block_reason}
                     else:
+                        refreshed_signal_row["entry_mode"] = (
+                            "new_entry" if existing_position is None else "scale_in"
+                        )
+                        refreshed_signal_row["projected_open_total_notional_after"] = float(
+                            projected_risk_snapshot.get("open_total_notional", 0.0) or 0.0
+                        ) + refreshed_notional
+                        refreshed_signal_row["projected_open_positions_after"] = int(
+                            projected_risk_snapshot.get("open_positions", 0) or 0
+                        ) + (1 if existing_position is None else 0)
                         execution_result = maybe_execute_paper_trade(refreshed_signal_row, sizing_snapshot)
                         if execution_result.get("executed") is True:
                             apply_execution_to_risk_snapshot(
@@ -776,14 +867,28 @@ def run_loop() -> None:
                 "risk_cap_notional": sizing_snapshot.get("risk_cap_notional"),
                 "book_cap_notional": sizing_snapshot.get("book_cap_notional"),
                 "edge_scale": sizing_snapshot.get("edge_scale"),
+                "rank_at_decision": current_rank,
+                "priority_score": priority_score,
+                "edge_bucket": refreshed_signal_row.get("edge_bucket"),
+                "minute_bucket": refreshed_signal_row.get("minute_bucket"),
+                "is_live": refreshed_signal_row.get("is_live"),
+                "is_prematch": refreshed_signal_row.get("is_prematch"),
+                "spread": relevant_spread,
+                "ask_price": relevant_ask_price,
+                "ask_size": relevant_ask_size,
+                "candidate_count": len(execution_candidates),
+                "was_top_ranked": current_rank == 1,
                 "executed": execution_result.get("executed"),
                 "execution_reason": execution_result.get("reason"),
-                "priority_score": priority_score,
             }
             if execution_result.get("executed") is True:
                 signal_event["projected_open_total_notional_after"] = float(
                     projected_risk_snapshot.get("open_total_notional", 0.0) or 0.0
                 )
+                signal_event["projected_open_positions_after"] = int(
+                    projected_risk_snapshot.get("open_positions", 0) or 0
+                )
+                signal_event["entry_mode"] = execution_result.get("reason")
             print(json.dumps(signal_event, sort_keys=True))
             append_jsonl(
                 SIGNAL_LOG_PATH,

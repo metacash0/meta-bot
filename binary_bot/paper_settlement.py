@@ -181,11 +181,17 @@ def settle_open_positions() -> dict:
                 "settlement_price": pnl["settlement_price"],
                 "gross_pnl": pnl["gross_pnl"],
                 "roi": pnl["roi"],
+                "won": bool(pnl["gross_pnl"] > 0.0),
                 "opened_at": row.get("opened_at"),
                 "closed_at": closed_at,
                 "final_status": result["status"],
                 "final_score_home": result["score_home"],
                 "final_score_away": result["score_away"],
+                "entry_rank_at_decision": row.get("entry_rank_at_decision"),
+                "entry_priority_score": row.get("entry_priority_score"),
+                "entry_edge": row.get("entry_edge"),
+                "entry_edge_bucket": row.get("entry_edge_bucket"),
+                "entry_mode": row.get("entry_mode"),
             },
         )
         positions_settled += 1

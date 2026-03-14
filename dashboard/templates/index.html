@@ -4,7 +4,6 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>MetaBot Operator Dashboard</title>
-    <div style="color: #7dd3fc; font-size: 12px;">BUILD MARKER: ranked-v2</div>
     <style>
       :root {
         --bg: #0b1020;
@@ -277,6 +276,41 @@
       </div>
 
       <div class="card" style="margin-bottom: 20px;">
+        <h2>Signal Quality</h2>
+        <div class="muted" style="margin-bottom: 12px;">Today&apos;s execution and blocking diagnostics</div>
+        <div class="grid risk-grid">
+          <div class="scan-item">
+            <div class="label">Executed Entries Today</div>
+            <div class="value">{{ signal_quality_summary.today_executed_entry_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Risk</div>
+            <div class="value">{{ signal_quality_summary.today_blocked_by_risk_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Liquidity</div>
+            <div class="value">{{ signal_quality_summary.today_blocked_by_liquidity_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Below Min Notional</div>
+            <div class="value">{{ signal_quality_summary.today_blocked_by_below_min_notional_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Scale-In Guard</div>
+            <div class="value">{{ signal_quality_summary.today_blocked_by_scale_in_guard_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Executed Edge</div>
+            <div class="value">{{ "%.2f%%"|format(signal_quality_summary.avg_edge_executed_entries_today * 100) }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Executed Priority Score</div>
+            <div class="value">{{ "%.2f"|format(signal_quality_summary.avg_priority_score_executed_entries_today) }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 20px;">
         <h2>Risk Limits</h2>
         <div class="grid risk-grid" style="margin-bottom: 14px;">
           <div class="scan-item">
@@ -431,7 +465,7 @@
             <tbody>
               {% for row in ranked_candidates %}
               <tr>
-                <td>{{ loop.index }}</td>
+                <td>{{ row.rank or loop.index }}</td>
                 <td>{{ row.league or "" }}</td>
                 <td>{{ row.market_name or "" }}</td>
                 <td>{{ row.side or "" }}</td>
