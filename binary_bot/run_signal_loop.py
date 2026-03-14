@@ -27,7 +27,6 @@ SCAN_LOG_PATH = "data/logs/scan_summary.jsonl"
 SIGNAL_LOG_PATH = "data/logs/signal_events.jsonl"
 SCAN_SLEEP_SEC = 10.0
 DEFAULT_BANKROLL = 5000.0
-PREMATCH_WINDOW_HOURS = float(os.getenv("PREMATCH_WINDOW_HOURS", "6"))
 RESEARCH_EFFECTIVE_MIN_EDGE = 0.025
 INCLUDE_LIVE_FIXTURES = True
 TRADING_ENABLED = os.getenv("TRADING_ENABLED", "true").lower() == "true"
@@ -35,6 +34,13 @@ NEW_ENTRIES_ENABLED = os.getenv("NEW_ENTRIES_ENABLED", "true").lower() == "true"
 SCALE_INS_ENABLED = os.getenv("SCALE_INS_ENABLED", "true").lower() == "true"
 PREMATCH_WINDOW_HOURS = float(os.getenv("PREMATCH_WINDOW_HOURS", "6"))
 DASHBOARD_DATABASE_URL = os.getenv("DASHBOARD_DATABASE_URL", "").strip()
+OPEN_POSITIONS_PATH = "data/paper_open_positions.json"
+PAPER_SETTLEMENTS_PATH = "data/logs/paper_settlements.jsonl"
+MAX_TOTAL_OPEN_NOTIONAL = 300.0
+MAX_PER_FIXTURE_NOTIONAL = 200.0
+MAX_OPEN_POSITIONS = 5
+MAX_PER_LEAGUE_NOTIONAL = 300.0
+DAILY_REALIZED_LOSS_STOP = -100.0
 
 os.makedirs("data/logs", exist_ok=True)
 
@@ -61,6 +67,163 @@ def append_jsonl(path: str, payload: dict) -> None:
             f.write(json.dumps(payload, sort_keys=True) + "\n")
     except Exception:
         pass
+
+
+def load_open_positions_payload() -> dict:
+    if not os.path.exists(OPEN_POSITIONS_PATH):
+        return {"positions": []}
+    try:
+        with open(OPEN_POSITIONS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except Exception:
+        return {"positions": []}
+    if not isinstance(payload, dict):
+        return {"positions": []}
+    positions = payload.get("positions")
+    if not isinstance(positions, list):
+        return {"positions": []}
+    return {"positions": [row for row in positions if isinstance(row, dict)]}
+
+
+def _parse_utc_date(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
+
+
+def load_today_realized_pnl() -> float:
+    if not os.path.exists(PAPER_SETTLEMENTS_PATH):
+        return 0.0
+    today_utc = datetime.now(timezone.utc).date()
+    total = 0.0
+    try:
+        with open(PAPER_SETTLEMENTS_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    row = json.loads(text)
+                except Exception:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                event_dt = _parse_utc_date(row.get("closed_at")) or _parse_utc_date(row.get("timestamp"))
+                if event_dt is None or event_dt.date() != today_utc:
+                    continue
+                try:
+                    total += float(row.get("gross_pnl", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    pass
+    except Exception:
+        return 0.0
+    return total
+
+
+def build_risk_snapshot() -> dict:
+    open_positions_payload = load_open_positions_payload()
+    positions = open_positions_payload.get("positions", [])
+    open_positions = 0
+    open_total_notional = 0.0
+    per_fixture_notional: Dict[str, float] = {}
+    per_league_notional: Dict[str, float] = {}
+
+    for row in positions:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status", "") or "") != "open":
+            continue
+        open_positions += 1
+        try:
+            total_notional = float(
+                row.get("position_total_notional", row.get("total_notional", 0.0)) or 0.0
+            )
+        except (TypeError, ValueError):
+            total_notional = 0.0
+        open_total_notional += total_notional
+
+        fixture_key = str(row.get("fixture_id", "") or "")
+        if fixture_key:
+            per_fixture_notional[fixture_key] = per_fixture_notional.get(fixture_key, 0.0) + total_notional
+
+        league_key = str(row.get("league", "") or "")
+        if league_key:
+            per_league_notional[league_key] = per_league_notional.get(league_key, 0.0) + total_notional
+
+    return {
+        "open_positions": open_positions,
+        "open_total_notional": open_total_notional,
+        "per_fixture_notional": per_fixture_notional,
+        "per_league_notional": per_league_notional,
+        "today_realized_pnl": load_today_realized_pnl(),
+        "_open_positions_payload": open_positions_payload,
+    }
+
+
+def check_risk_limits(signal_row: dict, risk_snapshot: dict) -> str | None:
+    try:
+        today_realized_pnl = float(risk_snapshot.get("today_realized_pnl", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        today_realized_pnl = 0.0
+    if today_realized_pnl <= DAILY_REALIZED_LOSS_STOP:
+        return "risk_limit_daily_loss_stop"
+
+    try:
+        proposed_notional = float(signal_row.get("recommended_notional", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        proposed_notional = 0.0
+    if proposed_notional <= 0.0:
+        return None
+
+    open_positions_payload = risk_snapshot.get("_open_positions_payload", {"positions": []})
+    existing_position = find_open_position(
+        open_positions_payload,
+        int(signal_row.get("fixture_id")),
+        str(signal_row.get("side") or ""),
+    )
+    if existing_position is None:
+        try:
+            open_positions = int(risk_snapshot.get("open_positions", 0) or 0)
+        except (TypeError, ValueError):
+            open_positions = 0
+        if open_positions >= MAX_OPEN_POSITIONS:
+            return "risk_limit_max_open_positions"
+
+    try:
+        open_total_notional = float(risk_snapshot.get("open_total_notional", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        open_total_notional = 0.0
+    if open_total_notional + proposed_notional > MAX_TOTAL_OPEN_NOTIONAL:
+        return "risk_limit_total_open_notional"
+
+    fixture_key = str(signal_row.get("fixture_id", "") or "")
+    fixture_notional = 0.0
+    try:
+        fixture_notional = float(risk_snapshot.get("per_fixture_notional", {}).get(fixture_key, 0.0) or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        fixture_notional = 0.0
+    if fixture_notional + proposed_notional > MAX_PER_FIXTURE_NOTIONAL:
+        return "risk_limit_fixture_notional"
+
+    league_key = str(signal_row.get("league", "") or "")
+    league_notional = 0.0
+    try:
+        league_notional = float(risk_snapshot.get("per_league_notional", {}).get(league_key, 0.0) or 0.0)
+    except (TypeError, ValueError, AttributeError):
+        league_notional = 0.0
+    if league_notional + proposed_notional > MAX_PER_LEAGUE_NOTIONAL:
+        return "risk_limit_league_notional"
+
+    return None
 
 
 def load_remote_control_state() -> Dict[str, Any] | None:
@@ -327,6 +490,7 @@ def run_loop() -> None:
                     sort_keys=True,
                 )
             )
+        risk_snapshot = build_risk_snapshot()
         mapping_rows = read_fixture_mapping_index()
         market_rows = read_market_map()
         now_utc = datetime.now(timezone.utc)
@@ -387,6 +551,8 @@ def run_loop() -> None:
                 research_signals_found += 1
             if signal_row.get("action") != "HOLD":
                 sizing_snapshot = size_from_signal_snapshot(signal_row, bankroll=DEFAULT_BANKROLL)
+                signal_row["recommended_notional"] = sizing_snapshot.get("recommended_notional")
+                signal_row["recommended_shares"] = sizing_snapshot.get("recommended_shares")
                 execution_result = {"executed": False, "reason": "trading_disabled"}
                 if trading_enabled:
                     open_positions_payload = read_open_positions()
@@ -400,7 +566,11 @@ def run_loop() -> None:
                     elif existing_position is not None and not scale_ins_enabled:
                         execution_result = {"executed": False, "reason": "scale_ins_disabled"}
                     else:
-                        execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
+                        risk_block_reason = check_risk_limits(signal_row, risk_snapshot)
+                        if risk_block_reason is not None:
+                            execution_result = {"executed": False, "reason": risk_block_reason}
+                        else:
+                            execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
                 signal_event = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "fixture_id": signal_row.get("fixture_id"),
@@ -460,6 +630,16 @@ def run_loop() -> None:
             "new_entries_enabled": new_entries_enabled,
             "scale_ins_enabled": scale_ins_enabled,
             "bucket_counts": bucket_counts,
+            "risk": {
+                "max_total_open_notional": MAX_TOTAL_OPEN_NOTIONAL,
+                "max_per_fixture_notional": MAX_PER_FIXTURE_NOTIONAL,
+                "max_open_positions": MAX_OPEN_POSITIONS,
+                "max_per_league_notional": MAX_PER_LEAGUE_NOTIONAL,
+                "daily_realized_loss_stop": DAILY_REALIZED_LOSS_STOP,
+                "open_positions": int(risk_snapshot.get("open_positions", 0) or 0),
+                "open_total_notional": float(risk_snapshot.get("open_total_notional", 0.0) or 0.0),
+                "today_realized_pnl": float(risk_snapshot.get("today_realized_pnl", 0.0) or 0.0),
+            },
         }
         print(
             json.dumps(

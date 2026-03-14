@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Paper Bot Trading Console</title>
+    <title>MetaBot Operator Dashboard</title>
     <style>
       :root {
         --bg: #0b1020;
@@ -59,6 +59,9 @@
       .stats {
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
         margin-bottom: 20px;
+      }
+      .risk-grid {
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       }
       .two-col {
         grid-template-columns: minmax(320px, 420px) 1fr;
@@ -164,6 +167,15 @@
         font-size: 16px;
         font-weight: 700;
       }
+      .usage-good {
+        color: #86efac;
+      }
+      .usage-warn {
+        color: #fcd34d;
+      }
+      .usage-bad {
+        color: #fca5a5;
+      }
       table {
         width: 100%;
         border-collapse: collapse;
@@ -227,8 +239,8 @@
     <div class="page">
       <div class="topbar">
         <div class="title">
-          <h1>Paper Trading Console</h1>
-          <p>Protected operator dashboard for monitoring and controlling the paper bot.</p>
+          <h1>MetaBot</h1>
+          <p>Operator Dashboard</p>
         </div>
         <div class="meta">
           <div>Controls updated: {{ controls.updated_at }}</div>
@@ -260,6 +272,66 @@
             {{ "%.2f"|format(realized_pnl_summary.realized_gross_pnl) }}
           </div>
           <div class="muted">From {{ realized_pnl_summary.settled_trades }} settlements</div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 20px;">
+        <h2>Risk Limits</h2>
+        <div class="grid risk-grid" style="margin-bottom: 14px;">
+          <div class="scan-item">
+            <div class="label">Max Total Open Notional</div>
+            <div class="value">{{ "%.2f"|format(risk_summary.max_total_open_notional) }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Max Per Fixture</div>
+            <div class="value">{{ "%.2f"|format(risk_summary.max_per_fixture_notional) }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Max Open Positions</div>
+            <div class="value">{{ risk_summary.max_open_positions }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Max Per League</div>
+            <div class="value">{{ "%.2f"|format(risk_summary.max_per_league_notional) }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Daily Loss Stop</div>
+            <div class="value">{{ "%.2f"|format(risk_summary.daily_realized_loss_stop) }}</div>
+          </div>
+        </div>
+
+        {% set total_usage = (risk_summary.open_total_notional / risk_summary.max_total_open_notional) if risk_summary.max_total_open_notional else 0 %}
+        {% set position_usage = (risk_summary.open_positions / risk_summary.max_open_positions) if risk_summary.max_open_positions else 0 %}
+        {% set loss_stop_breached = risk_summary.today_realized_pnl <= risk_summary.daily_realized_loss_stop %}
+        <div class="grid risk-grid">
+          <div class="scan-item">
+            <div class="label">Open Total Notional</div>
+            <div class="value {% if total_usage >= 1 %}usage-bad{% elif total_usage > 0.7 %}usage-warn{% else %}usage-good{% endif %}">
+              {{ "%.2f"|format(risk_summary.open_total_notional) }}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Remaining Total Capacity</div>
+            <div class="value">{{ "%.2f"|format(risk_summary.remaining_total_notional) }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Open Positions</div>
+            <div class="value {% if position_usage >= 1 %}usage-bad{% elif position_usage > 0.7 %}usage-warn{% else %}usage-good{% endif %}">
+              {{ risk_summary.open_positions }}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Today Realized PnL</div>
+            <div class="value {% if loss_stop_breached %}usage-bad{% elif risk_summary.today_realized_pnl < 0 %}usage-warn{% else %}usage-good{% endif %}">
+              {{ "%.2f"|format(risk_summary.today_realized_pnl) }}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Remaining Loss Buffer</div>
+            <div class="value {% if risk_summary.remaining_loss_buffer <= 0 %}usage-bad{% elif risk_summary.remaining_loss_buffer < 30 %}usage-warn{% else %}usage-good{% endif %}">
+              {{ "%.2f"|format(risk_summary.remaining_loss_buffer) }}
+            </div>
+          </div>
         </div>
       </div>
 

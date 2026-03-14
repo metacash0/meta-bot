@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -19,6 +20,11 @@ SCAN_SUMMARY_PATH = BASE_DIR / "data" / "logs" / "scan_summary.jsonl"
 SIGNAL_EVENTS_PATH = BASE_DIR / "data" / "logs" / "signal_events.jsonl"
 PAPER_TRADES_PATH = BASE_DIR / "data" / "logs" / "paper_trades.jsonl"
 PAPER_SETTLEMENTS_PATH = BASE_DIR / "data" / "logs" / "paper_settlements.jsonl"
+MAX_TOTAL_OPEN_NOTIONAL = 300.0
+MAX_PER_FIXTURE_NOTIONAL = 200.0
+MAX_OPEN_POSITIONS = 5
+MAX_PER_LEAGUE_NOTIONAL = 300.0
+DAILY_REALIZED_LOSS_STOP = -100.0
 
 
 def get_db_connection() -> psycopg.Connection:
@@ -183,6 +189,98 @@ def sum_realized_pnl(settlement_rows: Iterable[dict]) -> dict:
     }
 
 
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt
+
+
+def build_risk_snapshot(positions_payload: dict, settlement_rows: Iterable[dict]) -> dict:
+    positions = positions_payload.get("positions", []) if isinstance(positions_payload, dict) else []
+    open_positions = 0
+    open_total_notional = 0.0
+    per_fixture_notional: Dict[str, float] = {}
+    per_league_notional: Dict[str, float] = {}
+
+    for row in positions:
+        if not isinstance(row, dict) or str(row.get("status", "") or "") != "open":
+            continue
+        open_positions += 1
+        try:
+            total_notional = float(
+                row.get("position_total_notional", row.get("total_notional", 0.0)) or 0.0
+            )
+        except (TypeError, ValueError):
+            total_notional = 0.0
+        open_total_notional += total_notional
+
+        fixture_key = str(row.get("fixture_id", "") or "")
+        if fixture_key:
+            per_fixture_notional[fixture_key] = per_fixture_notional.get(fixture_key, 0.0) + total_notional
+
+        league_key = str(row.get("league", "") or "")
+        if league_key:
+            per_league_notional[league_key] = per_league_notional.get(league_key, 0.0) + total_notional
+
+    today_utc = datetime.now(timezone.utc).date()
+    today_realized_pnl = 0.0
+    for row in settlement_rows:
+        if not isinstance(row, dict):
+            continue
+        event_dt = _parse_utc_datetime(row.get("closed_at")) or _parse_utc_datetime(row.get("timestamp"))
+        if event_dt is None or event_dt.date() != today_utc:
+            continue
+        try:
+            today_realized_pnl += float(row.get("gross_pnl", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "open_positions": open_positions,
+        "open_total_notional": open_total_notional,
+        "per_fixture_notional": per_fixture_notional,
+        "per_league_notional": per_league_notional,
+        "today_realized_pnl": today_realized_pnl,
+    }
+
+
+def build_risk_summary(risk_snapshot: dict) -> dict:
+    try:
+        open_total_notional = float(risk_snapshot.get("open_total_notional", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        open_total_notional = 0.0
+    try:
+        open_positions = int(risk_snapshot.get("open_positions", 0) or 0)
+    except (TypeError, ValueError):
+        open_positions = 0
+    try:
+        today_realized_pnl = float(risk_snapshot.get("today_realized_pnl", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        today_realized_pnl = 0.0
+
+    return {
+        "max_total_open_notional": MAX_TOTAL_OPEN_NOTIONAL,
+        "max_per_fixture_notional": MAX_PER_FIXTURE_NOTIONAL,
+        "max_open_positions": MAX_OPEN_POSITIONS,
+        "max_per_league_notional": MAX_PER_LEAGUE_NOTIONAL,
+        "daily_realized_loss_stop": DAILY_REALIZED_LOSS_STOP,
+        "open_positions": open_positions,
+        "open_total_notional": open_total_notional,
+        "remaining_total_notional": max(0.0, MAX_TOTAL_OPEN_NOTIONAL - open_total_notional),
+        "today_realized_pnl": today_realized_pnl,
+        "remaining_loss_buffer": today_realized_pnl - DAILY_REALIZED_LOSS_STOP,
+    }
+
+
 def enrich_open_positions(positions_payload: dict) -> List[dict]:
     positions = positions_payload.get("positions", []) if isinstance(positions_payload, dict) else []
     enriched: List[dict] = []
@@ -250,7 +348,10 @@ def index() -> str:
     recent_paper_trades = list(reversed(read_jsonl_tail(PAPER_TRADES_PATH, limit=10)))
     recent_paper_settlements = list(reversed(read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10)))
     recent_signal_events = list(reversed(read_jsonl_tail(SIGNAL_EVENTS_PATH, limit=10)))
-    realized_pnl_summary = sum_realized_pnl(read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10000))
+    all_settlement_rows = read_jsonl_tail(PAPER_SETTLEMENTS_PATH, limit=10000)
+    realized_pnl_summary = sum_realized_pnl(all_settlement_rows)
+    risk_snapshot = build_risk_snapshot(open_positions_payload, all_settlement_rows)
+    risk_summary = build_risk_summary(risk_snapshot)
 
     return render_template(
         "index.html",
@@ -262,6 +363,7 @@ def index() -> str:
         recent_paper_settlements=recent_paper_settlements,
         recent_signal_events=recent_signal_events,
         realized_pnl_summary=realized_pnl_summary,
+        risk_summary=risk_summary,
     )
 
 
