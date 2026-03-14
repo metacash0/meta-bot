@@ -680,6 +680,27 @@ def run_loop() -> None:
             ),
             reverse=True,
         )
+        print(
+            json.dumps(
+                {
+                    "event_type": "ranked_candidates",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "candidates": [
+                        {
+                            "fixture_id": row.get("fixture_id"),
+                            "league": row.get("league"),
+                            "market_name": row.get("market_name"),
+                            "side": row.get("side"),
+                            "priority_score": row.get("priority_score"),
+                            "recommended_notional": row.get("recommended_notional"),
+                            "edge": row.get("edge"),
+                        }
+                        for row in execution_candidates[:10]
+                    ],
+                },
+                sort_keys=True,
+            )
+        )
         for candidate in execution_candidates:
             try:
                 refreshed_signal_row = build_signal_row(candidate["mapping_row"], candidate["market_row"])
