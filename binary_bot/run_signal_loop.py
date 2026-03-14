@@ -295,6 +295,25 @@ def apply_execution_to_risk_snapshot(
         existing_position["total_notional"] = updated_total
 
 
+def compute_priority_score(signal_row: dict) -> float:
+    side = str(signal_row.get("side", "") or "").upper()
+    if side == "YES":
+        edge_value = signal_row.get("yes_edge")
+    elif side == "NO":
+        edge_value = signal_row.get("no_edge")
+    else:
+        return 0.0
+
+    try:
+        edge = float(edge_value or 0.0)
+        recommended_notional = float(signal_row.get("recommended_notional", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if edge <= 0.0 or recommended_notional <= 0.0:
+        return 0.0
+    return edge * recommended_notional
+
+
 def load_remote_control_state() -> Dict[str, Any] | None:
     if not DASHBOARD_DATABASE_URL or psycopg is None:
         return None
@@ -572,6 +591,7 @@ def run_loop() -> None:
         research_signals_found = 0
         diagnostic_candidates: List[Dict[str, Any]] = []
         research_candidates: List[Dict[str, Any]] = []
+        execution_candidates: List[Dict[str, Any]] = []
         bucket_counts = {"0_1h": 0, "1_3h": 0, "3_6h": 0, "6_24h": 0}
 
         for mapping_row in mapping_rows:
@@ -623,71 +643,136 @@ def run_loop() -> None:
                 sizing_snapshot = size_from_signal_snapshot(signal_row, bankroll=DEFAULT_BANKROLL)
                 signal_row["recommended_notional"] = sizing_snapshot.get("recommended_notional")
                 signal_row["recommended_shares"] = sizing_snapshot.get("recommended_shares")
-                execution_result = {"executed": False, "reason": "trading_disabled"}
-                if trading_enabled:
-                    open_positions_payload = projected_risk_snapshot.get(
-                        "_open_positions_payload",
-                        {"positions": []},
-                    )
-                    existing_position = find_open_position(
-                        open_positions_payload,
-                        int(signal_row.get("fixture_id")),
-                        str(signal_row.get("side") or ""),
-                    )
-                    if existing_position is None and not new_entries_enabled:
-                        execution_result = {"executed": False, "reason": "new_entries_disabled"}
-                    elif existing_position is not None and not scale_ins_enabled:
-                        execution_result = {"executed": False, "reason": "scale_ins_disabled"}
-                    else:
-                        risk_block_reason = check_risk_limits(signal_row, projected_risk_snapshot)
-                        if risk_block_reason is not None:
-                            execution_result = {"executed": False, "reason": risk_block_reason}
+                side = str(signal_row.get("side") or "").upper()
+                action = str(signal_row.get("action", "") or "")
+                if action in {"BUY_YES", "BUY_NO"} and side in {"YES", "NO"}:
+                    try:
+                        recommended_notional = float(signal_row.get("recommended_notional", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        recommended_notional = 0.0
+                    if recommended_notional > 0.0:
+                        priority_score = compute_priority_score(signal_row)
+                        if side == "YES":
+                            edge_value = signal_row.get("yes_edge")
                         else:
-                            execution_result = maybe_execute_paper_trade(signal_row, sizing_snapshot)
-                            if execution_result.get("executed") is True:
-                                apply_execution_to_risk_snapshot(
-                                    projected_risk_snapshot,
-                                    signal_row,
-                                    float(sizing_snapshot.get("recommended_notional", 0.0) or 0.0),
-                                    existing_position is None,
-                                )
-                signal_event = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "fixture_id": signal_row.get("fixture_id"),
-                    "market_name": signal_row.get("market_name"),
-                    "league": signal_row.get("league"),
-                    "side": signal_row.get("side"),
-                    "status": signal_row.get("status"),
-                    "minute": signal_row.get("minute"),
-                    "yes_edge": signal_row.get("yes_edge"),
-                    "no_edge": signal_row.get("no_edge"),
-                    "yes_ask": signal_row.get("yes_ask"),
-                    "no_ask": signal_row.get("no_ask"),
-                    "yes_ask_size": signal_row.get("yes_ask_size"),
-                    "no_ask_size": signal_row.get("no_ask_size"),
-                    "recommended_notional": sizing_snapshot.get("recommended_notional"),
-                    "recommended_shares": sizing_snapshot.get("recommended_shares"),
-                    "sizing_reason": sizing_snapshot.get("reason"),
-                    "risk_cap_notional": sizing_snapshot.get("risk_cap_notional"),
-                    "book_cap_notional": sizing_snapshot.get("book_cap_notional"),
-                    "edge_scale": sizing_snapshot.get("edge_scale"),
-                    "executed": execution_result.get("executed"),
-                    "execution_reason": execution_result.get("reason"),
-                }
-                if execution_result.get("executed") is True:
-                    signal_event["projected_open_total_notional_after"] = float(
-                        projected_risk_snapshot.get("open_total_notional", 0.0) or 0.0
-                    )
-                print(json.dumps(signal_event, sort_keys=True))
-                append_jsonl(
-                    SIGNAL_LOG_PATH,
-                    {
-                        "event_type": "buy_signal",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "data": signal_event,
-                    },
+                            edge_value = signal_row.get("no_edge")
+                        execution_candidates.append(
+                            {
+                                "signal_row": dict(signal_row),
+                                "fixture_id": signal_row.get("fixture_id"),
+                                "league": signal_row.get("league"),
+                                "market_name": signal_row.get("market_name"),
+                                "side": side,
+                                "recommended_notional": recommended_notional,
+                                "edge": edge_value,
+                                "timestamp": signal_row.get("timestamp"),
+                                "priority_score": priority_score,
+                                "mapping_row": dict(mapping_row),
+                                "market_row": dict(market_row),
+                            }
+                        )
+
+        execution_candidates.sort(
+            key=lambda row: (
+                float(row.get("priority_score", 0.0) or 0.0),
+                float(row.get("edge", 0.0) or 0.0),
+                float(row.get("recommended_notional", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        for candidate in execution_candidates:
+            try:
+                refreshed_signal_row = build_signal_row(candidate["mapping_row"], candidate["market_row"])
+            except Exception:
+                continue
+
+            if str(refreshed_signal_row.get("action", "") or "") == "HOLD":
+                continue
+
+            refreshed_side = str(refreshed_signal_row.get("side") or "").upper()
+            refreshed_action = str(refreshed_signal_row.get("action", "") or "")
+            if refreshed_action not in {"BUY_YES", "BUY_NO"} or refreshed_side not in {"YES", "NO"}:
+                continue
+
+            sizing_snapshot = size_from_signal_snapshot(refreshed_signal_row, bankroll=DEFAULT_BANKROLL)
+            refreshed_signal_row["recommended_notional"] = sizing_snapshot.get("recommended_notional")
+            refreshed_signal_row["recommended_shares"] = sizing_snapshot.get("recommended_shares")
+            priority_score = compute_priority_score(refreshed_signal_row)
+            try:
+                refreshed_notional = float(refreshed_signal_row.get("recommended_notional", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                refreshed_notional = 0.0
+            if refreshed_notional <= 0.0:
+                continue
+
+            execution_result = {"executed": False, "reason": "trading_disabled"}
+            existing_position = None
+            if trading_enabled:
+                open_positions_payload = projected_risk_snapshot.get(
+                    "_open_positions_payload",
+                    {"positions": []},
                 )
-                signals_found += 1
+                existing_position = find_open_position(
+                    open_positions_payload,
+                    int(refreshed_signal_row.get("fixture_id")),
+                    str(refreshed_signal_row.get("side") or ""),
+                )
+                if existing_position is None and not new_entries_enabled:
+                    execution_result = {"executed": False, "reason": "new_entries_disabled"}
+                elif existing_position is not None and not scale_ins_enabled:
+                    execution_result = {"executed": False, "reason": "scale_ins_disabled"}
+                else:
+                    risk_block_reason = check_risk_limits(refreshed_signal_row, projected_risk_snapshot)
+                    if risk_block_reason is not None:
+                        execution_result = {"executed": False, "reason": risk_block_reason}
+                    else:
+                        execution_result = maybe_execute_paper_trade(refreshed_signal_row, sizing_snapshot)
+                        if execution_result.get("executed") is True:
+                            apply_execution_to_risk_snapshot(
+                                projected_risk_snapshot,
+                                refreshed_signal_row,
+                                refreshed_notional,
+                                existing_position is None,
+                            )
+
+            signal_event = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "fixture_id": refreshed_signal_row.get("fixture_id"),
+                "market_name": refreshed_signal_row.get("market_name"),
+                "league": refreshed_signal_row.get("league"),
+                "side": refreshed_signal_row.get("side"),
+                "status": refreshed_signal_row.get("status"),
+                "minute": refreshed_signal_row.get("minute"),
+                "yes_edge": refreshed_signal_row.get("yes_edge"),
+                "no_edge": refreshed_signal_row.get("no_edge"),
+                "yes_ask": refreshed_signal_row.get("yes_ask"),
+                "no_ask": refreshed_signal_row.get("no_ask"),
+                "yes_ask_size": refreshed_signal_row.get("yes_ask_size"),
+                "no_ask_size": refreshed_signal_row.get("no_ask_size"),
+                "recommended_notional": sizing_snapshot.get("recommended_notional"),
+                "recommended_shares": sizing_snapshot.get("recommended_shares"),
+                "sizing_reason": sizing_snapshot.get("reason"),
+                "risk_cap_notional": sizing_snapshot.get("risk_cap_notional"),
+                "book_cap_notional": sizing_snapshot.get("book_cap_notional"),
+                "edge_scale": sizing_snapshot.get("edge_scale"),
+                "executed": execution_result.get("executed"),
+                "execution_reason": execution_result.get("reason"),
+                "priority_score": priority_score,
+            }
+            if execution_result.get("executed") is True:
+                signal_event["projected_open_total_notional_after"] = float(
+                    projected_risk_snapshot.get("open_total_notional", 0.0) or 0.0
+                )
+            print(json.dumps(signal_event, sort_keys=True))
+            append_jsonl(
+                SIGNAL_LOG_PATH,
+                {
+                    "event_type": "buy_signal",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "data": signal_event,
+                },
+            )
+            signals_found += 1
 
         diagnostic_candidates.sort(key=lambda row: row["best_gap"])
         near_signals = []
