@@ -313,6 +313,120 @@ def build_signal_quality_summary(
     }
 
 
+def build_decision_audit_summary(signal_event_rows: Iterable[dict]) -> dict:
+    today_utc = datetime.now(timezone.utc).date()
+    opportunities_seen = 0
+    top_ranked_seen = 0
+    executed_count = 0
+    executed_top_ranked_count = 0
+    executed_non_top_ranked_count = 0
+    blocked_risk_count = 0
+    blocked_scale_in_guard_count = 0
+    blocked_liquidity_count = 0
+    blocked_other_count = 0
+    rank_1_executed = 0
+    rank_2_executed = 0
+    rank_3plus_executed = 0
+    executed_edges: List[float] = []
+    executed_priority_scores: List[float] = []
+    executed_ranks: List[float] = []
+
+    for row in signal_event_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "buy_signal":
+            continue
+        event_dt = _parse_utc_datetime(row.get("timestamp"))
+        if event_dt is None or event_dt.date() != today_utc:
+            continue
+        data = row.get("data", {})
+        if not isinstance(data, dict):
+            continue
+
+        opportunities_seen += 1
+        try:
+            rank_at_decision = int(data.get("rank_at_decision")) if data.get("rank_at_decision") is not None else None
+        except (TypeError, ValueError):
+            rank_at_decision = None
+        if rank_at_decision == 1:
+            top_ranked_seen += 1
+
+        executed = data.get("executed") is True
+        execution_reason = str(data.get("execution_reason", "") or "")
+        sizing_reason = str(data.get("sizing_reason", "") or "")
+
+        if executed:
+            executed_count += 1
+            if rank_at_decision == 1:
+                executed_top_ranked_count += 1
+                rank_1_executed += 1
+            elif rank_at_decision == 2:
+                executed_non_top_ranked_count += 1
+                rank_2_executed += 1
+            elif rank_at_decision is not None and rank_at_decision >= 3:
+                executed_non_top_ranked_count += 1
+                rank_3plus_executed += 1
+            elif rank_at_decision is not None and rank_at_decision > 1:
+                executed_non_top_ranked_count += 1
+
+            try:
+                executed_priority_scores.append(float(data.get("priority_score", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                pass
+            if rank_at_decision is not None:
+                executed_ranks.append(float(rank_at_decision))
+
+            side = str(data.get("side", "") or "").upper()
+            try:
+                if side == "YES" and data.get("yes_edge") is not None:
+                    executed_edges.append(float(data.get("yes_edge")))
+                elif side == "NO" and data.get("no_edge") is not None:
+                    executed_edges.append(float(data.get("no_edge")))
+                elif data.get("edge") is not None:
+                    executed_edges.append(float(data.get("edge")))
+            except (TypeError, ValueError):
+                pass
+            continue
+
+        if execution_reason.startswith("risk_limit"):
+            blocked_risk_count += 1
+        elif execution_reason == "scale_in_edge_not_improved":
+            blocked_scale_in_guard_count += 1
+        elif execution_reason in {"missing_price", "missing_size"} or sizing_reason in {"missing_price", "missing_size"}:
+            blocked_liquidity_count += 1
+        else:
+            blocked_other_count += 1
+
+    non_top_seen = max(0, opportunities_seen - top_ranked_seen)
+    return {
+        "opportunities_seen": opportunities_seen,
+        "top_ranked_seen": top_ranked_seen,
+        "executed_count": executed_count,
+        "executed_top_ranked_count": executed_top_ranked_count,
+        "executed_non_top_ranked_count": executed_non_top_ranked_count,
+        "blocked_risk_count": blocked_risk_count,
+        "blocked_scale_in_guard_count": blocked_scale_in_guard_count,
+        "blocked_liquidity_count": blocked_liquidity_count,
+        "blocked_other_count": blocked_other_count,
+        "avg_executed_edge": (sum(executed_edges) / len(executed_edges)) if executed_edges else None,
+        "avg_executed_priority_score": (
+            sum(executed_priority_scores) / len(executed_priority_scores)
+            if executed_priority_scores
+            else None
+        ),
+        "avg_rank_of_executed_trades": (
+            sum(executed_ranks) / len(executed_ranks) if executed_ranks else None
+        ),
+        "top_rank_execution_rate": (
+            executed_top_ranked_count / top_ranked_seen if top_ranked_seen > 0 else None
+        ),
+        "non_top_rank_execution_rate": (
+            executed_non_top_ranked_count / non_top_seen if non_top_seen > 0 else None
+        ),
+        "rank_1_executed": rank_1_executed,
+        "rank_2_executed": rank_2_executed,
+        "rank_3plus_executed": rank_3plus_executed,
+    }
+
+
 def sum_open_positions(positions_payload: dict) -> dict:
     positions = positions_payload.get("positions", []) if isinstance(positions_payload, dict) else []
     open_positions = 0
@@ -542,6 +656,7 @@ def index() -> str:
     risk_snapshot = build_risk_snapshot(open_positions_payload, all_settlement_rows)
     risk_summary = build_risk_summary(risk_snapshot)
     signal_quality_summary = build_signal_quality_summary(signal_event_rows, paper_trade_rows)
+    decision_audit_summary = build_decision_audit_summary(signal_event_rows)
     latest_scan_cards = build_latest_scan_cards(latest_scan_summary)
     latest_scan_bucket_counts = format_bucket_counts(latest_scan_summary.get("bucket_counts"))
     latest_scan_timestamp = format_scan_timestamp(latest_scan_summary.get("timestamp"))
@@ -560,6 +675,7 @@ def index() -> str:
         realized_pnl_summary=realized_pnl_summary,
         risk_summary=risk_summary,
         signal_quality_summary=signal_quality_summary,
+        decision_audit_summary=decision_audit_summary,
         latest_scan_cards=latest_scan_cards,
         latest_scan_bucket_counts=latest_scan_bucket_counts,
         latest_scan_timestamp=latest_scan_timestamp,

@@ -322,6 +322,125 @@
       </div>
 
       <div class="card" style="margin-bottom: 20px;">
+        <h2>Decision Audit Summary</h2>
+        <div class="muted" style="margin-bottom: 12px;">Execution quality from logged decision events</div>
+        <div class="grid risk-grid" style="margin-bottom: 14px;">
+          <div class="scan-item">
+            <div class="label">Opportunities Seen</div>
+            <div class="value">{{ decision_audit_summary.opportunities_seen }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Top-Ranked Seen</div>
+            <div class="value">{{ decision_audit_summary.top_ranked_seen }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Executed Trades</div>
+            <div class="value">{{ decision_audit_summary.executed_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Top-Ranked Executed</div>
+            <div class="value">{{ decision_audit_summary.executed_top_ranked_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Non-Top Executed</div>
+            <div class="value">{{ decision_audit_summary.executed_non_top_ranked_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Executed Edge</div>
+            <div class="value">
+              {% if decision_audit_summary.avg_executed_edge is not none %}
+                {{ "%.2f%%"|format(decision_audit_summary.avg_executed_edge * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Executed Priority</div>
+            <div class="value">
+              {% if decision_audit_summary.avg_executed_priority_score is not none %}
+                {{ "%.2f"|format(decision_audit_summary.avg_executed_priority_score) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Executed Rank</div>
+            <div class="value">
+              {% if decision_audit_summary.avg_rank_of_executed_trades is not none %}
+                {{ "%.2f"|format(decision_audit_summary.avg_rank_of_executed_trades) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Top-Rank Execution Rate</div>
+            <div class="value">
+              {% if decision_audit_summary.top_rank_execution_rate is not none %}
+                {{ "%.1f%%"|format(decision_audit_summary.top_rank_execution_rate * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Non-Top Execution Rate</div>
+            <div class="value">
+              {% if decision_audit_summary.non_top_rank_execution_rate is not none %}
+                {{ "%.1f%%"|format(decision_audit_summary.non_top_rank_execution_rate * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Risk</div>
+            <div class="value">{{ decision_audit_summary.blocked_risk_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Scale-In Guard</div>
+            <div class="value">{{ decision_audit_summary.blocked_scale_in_guard_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked by Liquidity</div>
+            <div class="value">{{ decision_audit_summary.blocked_liquidity_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Blocked Other</div>
+            <div class="value">{{ decision_audit_summary.blocked_other_count }}</div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th colspan="3">Execution by Rank</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Rank 1</td>
+                <td>{{ decision_audit_summary.rank_1_executed }}</td>
+                <td class="muted">Top-ranked executions</td>
+              </tr>
+              <tr>
+                <td>Rank 2</td>
+                <td>{{ decision_audit_summary.rank_2_executed }}</td>
+                <td class="muted">Second-ranked executions</td>
+              </tr>
+              <tr>
+                <td>Rank 3+</td>
+                <td>{{ decision_audit_summary.rank_3plus_executed }}</td>
+                <td class="muted">Lower-ranked executions</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom: 20px;">
         <h2>Risk Limits</h2>
         <div class="grid risk-grid" style="margin-bottom: 14px;">
           <div class="scan-item">
