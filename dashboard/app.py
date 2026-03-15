@@ -427,6 +427,105 @@ def build_decision_audit_summary(signal_event_rows: Iterable[dict]) -> dict:
     }
 
 
+def build_missed_top_rank_review(signal_event_rows: Iterable[dict]) -> dict:
+    blocked_top_rank_count = 0
+    blocked_top_rank_by_reason = {
+        "risk_limit_total_open_notional": 0,
+        "scale_in_edge_not_improved": 0,
+        "liquidity_related": 0,
+        "other": 0,
+    }
+    blocked_edges: List[float] = []
+    blocked_priority_scores: List[float] = []
+    blocked_rows: List[dict] = []
+    highest_edge_blocked: float | None = None
+
+    for row in signal_event_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "buy_signal":
+            continue
+        data = row.get("data", {})
+        if not isinstance(data, dict):
+            continue
+        if data.get("executed") is True:
+            continue
+        try:
+            rank_at_decision = int(data.get("rank_at_decision")) if data.get("rank_at_decision") is not None else None
+        except (TypeError, ValueError):
+            rank_at_decision = None
+        if rank_at_decision != 1:
+            continue
+
+        blocked_top_rank_count += 1
+        execution_reason = str(data.get("execution_reason", "") or "")
+        sizing_reason = str(data.get("sizing_reason", "") or "")
+
+        if execution_reason == "risk_limit_total_open_notional":
+            blocked_top_rank_by_reason["risk_limit_total_open_notional"] += 1
+        elif execution_reason == "scale_in_edge_not_improved":
+            blocked_top_rank_by_reason["scale_in_edge_not_improved"] += 1
+        elif execution_reason in {"missing_price", "missing_size"} or sizing_reason in {"missing_price", "missing_size"}:
+            blocked_top_rank_by_reason["liquidity_related"] += 1
+        else:
+            blocked_top_rank_by_reason["other"] += 1
+
+        side = str(data.get("side", "") or "").upper()
+        edge_value = None
+        try:
+            if side == "YES" and data.get("yes_edge") is not None:
+                edge_value = float(data.get("yes_edge"))
+            elif side == "NO" and data.get("no_edge") is not None:
+                edge_value = float(data.get("no_edge"))
+            elif data.get("edge") is not None:
+                edge_value = float(data.get("edge"))
+        except (TypeError, ValueError):
+            edge_value = None
+
+        if edge_value is not None:
+            blocked_edges.append(edge_value)
+            if highest_edge_blocked is None or edge_value > highest_edge_blocked:
+                highest_edge_blocked = edge_value
+
+        try:
+            blocked_priority_scores.append(float(data.get("priority_score", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            pass
+
+        blocked_rows.append(
+            {
+                "timestamp": data.get("timestamp") or row.get("timestamp"),
+                "fixture_id": data.get("fixture_id"),
+                "market_name": data.get("market_name"),
+                "league": data.get("league"),
+                "side": data.get("side"),
+                "rank_at_decision": rank_at_decision,
+                "edge": edge_value,
+                "priority_score": data.get("priority_score"),
+                "execution_reason": execution_reason,
+                "recommended_notional": data.get("recommended_notional"),
+                "minute": data.get("minute"),
+                "score_state": data.get("score_state"),
+            }
+        )
+
+    blocked_rows.sort(
+        key=lambda row: _parse_utc_datetime(row.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+
+    return {
+        "blocked_top_rank_count": blocked_top_rank_count,
+        "blocked_top_rank_by_reason": blocked_top_rank_by_reason,
+        "avg_blocked_top_rank_edge": (sum(blocked_edges) / len(blocked_edges)) if blocked_edges else None,
+        "avg_blocked_top_rank_priority": (
+            sum(blocked_priority_scores) / len(blocked_priority_scores)
+            if blocked_priority_scores
+            else None
+        ),
+        "highest_edge_blocked": highest_edge_blocked,
+        "recent_blocked_top_ranked": blocked_rows[:5],
+    }
+
+
 def sum_open_positions(positions_payload: dict) -> dict:
     positions = positions_payload.get("positions", []) if isinstance(positions_payload, dict) else []
     open_positions = 0
@@ -657,6 +756,7 @@ def index() -> str:
     risk_summary = build_risk_summary(risk_snapshot)
     signal_quality_summary = build_signal_quality_summary(signal_event_rows, paper_trade_rows)
     decision_audit_summary = build_decision_audit_summary(signal_event_rows)
+    missed_top_rank_review = build_missed_top_rank_review(signal_event_rows)
     latest_scan_cards = build_latest_scan_cards(latest_scan_summary)
     latest_scan_bucket_counts = format_bucket_counts(latest_scan_summary.get("bucket_counts"))
     latest_scan_timestamp = format_scan_timestamp(latest_scan_summary.get("timestamp"))
@@ -676,6 +776,7 @@ def index() -> str:
         risk_summary=risk_summary,
         signal_quality_summary=signal_quality_summary,
         decision_audit_summary=decision_audit_summary,
+        missed_top_rank_review=missed_top_rank_review,
         latest_scan_cards=latest_scan_cards,
         latest_scan_bucket_counts=latest_scan_bucket_counts,
         latest_scan_timestamp=latest_scan_timestamp,

@@ -441,6 +441,85 @@
       </div>
 
       <div class="card" style="margin-bottom: 20px;">
+        <h2>Missed Top-Rank Review</h2>
+        <div class="muted" style="margin-bottom: 12px;">Recent top-ranked candidates that were blocked before execution</div>
+        <div class="grid risk-grid" style="margin-bottom: 14px;">
+          <div class="scan-item">
+            <div class="label">Blocked Top-Ranked</div>
+            <div class="value">{{ missed_top_rank_review.blocked_top_rank_count }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Blocked Top-Rank Edge</div>
+            <div class="value">
+              {% if missed_top_rank_review.avg_blocked_top_rank_edge is not none %}
+                {{ "%.2f%%"|format(missed_top_rank_review.avg_blocked_top_rank_edge * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Avg Blocked Top-Rank Priority</div>
+            <div class="value">
+              {% if missed_top_rank_review.avg_blocked_top_rank_priority is not none %}
+                {{ "%.2f"|format(missed_top_rank_review.avg_blocked_top_rank_priority) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Highest Blocked Edge</div>
+            <div class="value">
+              {% if missed_top_rank_review.highest_edge_blocked is not none %}
+                {{ "%.2f%%"|format(missed_top_rank_review.highest_edge_blocked * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% if missed_top_rank_review.recent_blocked_top_ranked %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>League</th>
+                <th>Market</th>
+                <th>Side</th>
+                <th>Edge</th>
+                <th>Priority</th>
+                <th>Reason</th>
+                <th>Recommended Notional</th>
+                <th>Minute</th>
+                <th>Score State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in missed_top_rank_review.recent_blocked_top_ranked %}
+              <tr>
+                <td>{{ row.timestamp or "" }}</td>
+                <td>{{ row.league or "" }}</td>
+                <td>{{ row.market_name or "" }}</td>
+                <td>{{ row.side or "" }}</td>
+                <td>{% if row.edge is not none %}{{ "%.2f%%"|format(row.edge * 100) }}{% else %}-{% endif %}</td>
+                <td>{% if row.priority_score is not none %}{{ "%.2f"|format(row.priority_score) }}{% else %}-{% endif %}</td>
+                <td>{{ row.execution_reason or "" }}</td>
+                <td>{% if row.recommended_notional is not none %}${{ "%.2f"|format(row.recommended_notional) }}{% else %}-{% endif %}</td>
+                <td>{{ row.minute if row.minute is not none else "-" }}</td>
+                <td>{{ row.score_state or "" }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty">No blocked top-ranked decisions yet</div>
+        {% endif %}
+      </div>
+
+      <div class="card" style="margin-bottom: 20px;">
         <h2>Risk Limits</h2>
         <div class="grid risk-grid" style="margin-bottom: 14px;">
           <div class="scan-item">
