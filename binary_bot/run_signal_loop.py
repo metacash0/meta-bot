@@ -296,23 +296,113 @@ def apply_execution_to_risk_snapshot(
         existing_position["total_notional"] = updated_total
 
 
-def compute_priority_score(signal_row: dict) -> float:
+def get_priority_spread_multiplier(spread_value: Any) -> float:
+    try:
+        spread = float(spread_value)
+    except (TypeError, ValueError):
+        return 0.65
+    if spread <= 0.01:
+        return 1.00
+    if spread <= 0.02:
+        return 0.92
+    if spread <= 0.03:
+        return 0.82
+    return 0.65
+
+
+def get_priority_liquidity_multiplier(ask_price: Any, ask_size: Any, recommended_notional: Any) -> float:
+    try:
+        ask_size_notional = float(ask_price) * float(ask_size)
+        target_notional = float(recommended_notional)
+    except (TypeError, ValueError):
+        return 0.60
+    if ask_size_notional >= 2.0 * target_notional:
+        return 1.00
+    if ask_size_notional >= 1.25 * target_notional:
+        return 0.92
+    if ask_size_notional >= 1.0 * target_notional:
+        return 0.82
+    return 0.60
+
+
+def get_priority_execution_multiplier(tradable: Any, sizing_reason: Any) -> float:
+    tradable_flag = tradable is True
+    reason = str(sizing_reason or "")
+    if tradable_flag and reason == "ok":
+        return 1.00
+    if tradable_flag:
+        return 0.90
+    return 0.70
+
+
+def compute_priority_score(signal_row: dict) -> dict:
     side = str(signal_row.get("side", "") or "").upper()
     if side == "YES":
         edge_value = signal_row.get("yes_edge")
+        spread_value = signal_row.get("yes_spread")
+        ask_price = signal_row.get("yes_ask")
+        ask_size = signal_row.get("yes_ask_size")
+        tradable = signal_row.get("yes_tradable")
     elif side == "NO":
         edge_value = signal_row.get("no_edge")
+        spread_value = signal_row.get("no_spread")
+        ask_price = signal_row.get("no_ask")
+        ask_size = signal_row.get("no_ask_size")
+        tradable = signal_row.get("no_tradable")
     else:
-        return 0.0
+        return {
+            "priority_score": 0.0,
+            "priority_edge_component": 0.0,
+            "priority_spread_multiplier": 0.65,
+            "priority_liquidity_multiplier": 0.60,
+            "priority_execution_multiplier": 0.70,
+        }
 
     try:
         edge = float(edge_value or 0.0)
         recommended_notional = float(signal_row.get("recommended_notional", 0.0) or 0.0)
     except (TypeError, ValueError):
-        return 0.0
+        return {
+            "priority_score": 0.0,
+            "priority_edge_component": 0.0,
+            "priority_spread_multiplier": 0.65,
+            "priority_liquidity_multiplier": 0.60,
+            "priority_execution_multiplier": 0.70,
+        }
     if edge <= 0.0 or recommended_notional <= 0.0:
-        return 0.0
-    return edge * recommended_notional
+        return {
+            "priority_score": 0.0,
+            "priority_edge_component": 0.0,
+            "priority_spread_multiplier": get_priority_spread_multiplier(spread_value),
+            "priority_liquidity_multiplier": get_priority_liquidity_multiplier(
+                ask_price, ask_size, recommended_notional
+            ),
+            "priority_execution_multiplier": get_priority_execution_multiplier(
+                tradable, signal_row.get("sizing_reason")
+            ),
+        }
+
+    priority_edge_component = abs(edge) * recommended_notional
+    priority_spread_multiplier = get_priority_spread_multiplier(spread_value)
+    priority_liquidity_multiplier = get_priority_liquidity_multiplier(
+        ask_price, ask_size, recommended_notional
+    )
+    priority_execution_multiplier = get_priority_execution_multiplier(
+        tradable, signal_row.get("sizing_reason")
+    )
+    priority_score = (
+        priority_edge_component
+        * priority_spread_multiplier
+        * priority_liquidity_multiplier
+        * priority_execution_multiplier
+    )
+    return {
+        "priority_score": priority_score,
+        "priority_edge_component": priority_edge_component,
+        "priority_spread_multiplier": priority_spread_multiplier,
+        "priority_liquidity_multiplier": priority_liquidity_multiplier,
+        "priority_execution_multiplier": priority_execution_multiplier,
+    }
 
 
 def is_live_status(status: Any) -> bool:
@@ -462,36 +552,150 @@ def should_scan_fixture(
     return 0.0 <= hours_to_kickoff <= float(prematch_window_hours)
 
 
+def get_production_min_edge(minute: int) -> float:
+    minute_value = max(0, int(minute))
+    if minute_value <= 15:
+        return 0.06
+    if minute_value <= 30:
+        return 0.05
+    if minute_value <= 60:
+        return 0.04
+    if minute_value <= 75:
+        return 0.035
+    return 0.03
+
+
+def classify_score_state(
+    score_home: Any,
+    score_away: Any,
+    live_flag: bool,
+) -> str:
+    if not live_flag:
+        return "prematch"
+    try:
+        home = int(score_home)
+        away = int(score_away)
+    except (TypeError, ValueError):
+        return "unknown"
+    diff = home - away
+    if diff == 0:
+        return "level"
+    if diff == 1:
+        return "home_leading_1"
+    if diff >= 2:
+        return "home_leading_2_plus"
+    if diff == -1:
+        return "away_leading_1"
+    return "away_leading_2_plus"
+
+
+def get_score_state_adjustment(score_state: str, minute: int, live_flag: bool) -> float:
+    if not live_flag:
+        return 0.0
+    minute_value = max(0, int(minute))
+    if minute_value <= 30:
+        bucket = "early"
+    elif minute_value <= 60:
+        bucket = "mid"
+    elif minute_value <= 75:
+        bucket = "late"
+    else:
+        bucket = "very_late"
+
+    adjustment_table = {
+        "level": {"early": 0.0, "mid": 0.0, "late": 0.0, "very_late": 0.0},
+        "home_leading_1": {"early": -0.005, "mid": -0.010, "late": -0.015, "very_late": -0.020},
+        "home_leading_2_plus": {"early": -0.010, "mid": -0.020, "late": -0.030, "very_late": -0.040},
+        "away_leading_1": {"early": 0.005, "mid": 0.010, "late": 0.015, "very_late": 0.020},
+        "away_leading_2_plus": {"early": 0.010, "mid": 0.020, "late": 0.030, "very_late": 0.040},
+    }
+    return float(adjustment_table.get(score_state, {}).get(bucket, 0.0))
+
+
 def build_signal_row(mapping_row: Dict[str, Any], market_row: Dict[str, Any]) -> Dict[str, Any]:
     fixture_id = int(mapping_row["fixture_id"])
     snapshot = build_market_signal_snapshot(fixture_id=fixture_id)
+    minute = int(snapshot.get("minute", 0) or 0)
+    production_effective_min_edge = get_production_min_edge(minute)
+    status = str(snapshot.get("status", "") or "")
+    live_flag = is_live_status(status)
+    score_home = snapshot.get("score_home")
+    score_away = snapshot.get("score_away")
+    score_state = classify_score_state(score_home, score_away, live_flag)
+    base_model_probability = float(snapshot.get("home_yes_fair", 0.0) or 0.0)
+    score_state_adjustment = get_score_state_adjustment(score_state, minute, live_flag)
+    adjusted_model_probability = min(0.999, max(0.001, base_model_probability + score_state_adjustment))
+    adjusted_model_probability_no = 1.0 - adjusted_model_probability
+
+    yes_mid = snapshot.get("yes_mid")
+    no_mid = snapshot.get("no_mid")
+    try:
+        yes_edge = adjusted_model_probability - float(yes_mid) if yes_mid is not None else None
+    except (TypeError, ValueError):
+        yes_edge = None
+    try:
+        no_edge = adjusted_model_probability_no - float(no_mid) if no_mid is not None else None
+    except (TypeError, ValueError):
+        no_edge = None
+
+    yes_tradable = snapshot.get("yes_tradable")
+    no_tradable = snapshot.get("no_tradable")
+    yes_qualifies = yes_tradable is True and yes_edge is not None and yes_edge >= production_effective_min_edge
+    no_qualifies = no_tradable is True and no_edge is not None and no_edge >= production_effective_min_edge
+    action = "HOLD"
+    side = None
+    if yes_qualifies and (not no_qualifies or float(yes_edge) >= float(no_edge)):
+        action = "BUY_YES"
+        side = "YES"
+    elif no_qualifies:
+        action = "BUY_NO"
+        side = "NO"
+
+    try:
+        score_home_value = int(score_home or 0)
+    except (TypeError, ValueError):
+        score_home_value = 0
+    try:
+        score_away_value = int(score_away or 0)
+    except (TypeError, ValueError):
+        score_away_value = 0
+
     return {
         "timestamp": str(snapshot.get("timestamp", datetime.now(timezone.utc).isoformat()) or datetime.now(timezone.utc).isoformat()),
         "fixture_id": fixture_id,
         "market_name": str(snapshot.get("market_name", mapping_row.get("market_name", market_row.get("name", ""))) or ""),
         "league": str(snapshot.get("league", mapping_row.get("league", market_row.get("league", ""))) or ""),
-        "minute": int(snapshot.get("minute", 0) or 0),
+        "minute": minute,
         "home_team": str(snapshot.get("home_team", market_row.get("home_team", "")) or ""),
         "away_team": str(snapshot.get("away_team", market_row.get("away_team", "")) or ""),
-        "status": str(snapshot.get("status", "") or ""),
-        "home_yes_fair": float(snapshot.get("home_yes_fair", 0.0) or 0.0),
+        "status": status,
+        "score_home": score_home_value,
+        "score_away": score_away_value,
+        "home_yes_fair": adjusted_model_probability,
+        "base_model_probability": base_model_probability,
+        "adjusted_model_probability": adjusted_model_probability,
+        "score_state": score_state,
+        "score_state_adjustment": score_state_adjustment,
         "yes_bid": snapshot.get("yes_bid"),
         "yes_ask": snapshot.get("yes_ask"),
         "yes_bid_size": snapshot.get("yes_bid_size"),
         "yes_ask_size": snapshot.get("yes_ask_size"),
+        "yes_mid": yes_mid,
         "yes_spread": snapshot.get("yes_spread"),
-        "yes_edge": snapshot.get("yes_edge"),
+        "yes_edge": yes_edge,
         "no_bid": snapshot.get("no_bid"),
         "no_ask": snapshot.get("no_ask"),
         "no_bid_size": snapshot.get("no_bid_size"),
         "no_ask_size": snapshot.get("no_ask_size"),
+        "no_mid": no_mid,
         "no_spread": snapshot.get("no_spread"),
-        "no_edge": snapshot.get("no_edge"),
-        "effective_min_edge": snapshot.get("effective_min_edge"),
-        "yes_tradable": snapshot.get("yes_tradable"),
-        "no_tradable": snapshot.get("no_tradable"),
-        "action": str(snapshot.get("action", "HOLD") or "HOLD"),
-        "side": snapshot.get("side"),
+        "no_edge": no_edge,
+        "effective_min_edge": production_effective_min_edge,
+        "production_effective_min_edge": production_effective_min_edge,
+        "yes_tradable": yes_tradable,
+        "no_tradable": no_tradable,
+        "action": action,
+        "side": side,
     }
 
 
@@ -540,6 +744,11 @@ def _build_diagnostic_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | 
         "yes_ask_size": signal_row.get("yes_ask_size"),
         "no_ask_size": signal_row.get("no_ask_size"),
         "effective_min_edge": effective_min_edge,
+        "production_effective_min_edge": signal_row.get("production_effective_min_edge"),
+        "score_state": signal_row.get("score_state"),
+        "score_state_adjustment": signal_row.get("score_state_adjustment"),
+        "base_model_probability": signal_row.get("base_model_probability"),
+        "adjusted_model_probability": signal_row.get("adjusted_model_probability"),
         "best_gap": min(valid_gaps),
     }
 
@@ -580,7 +789,7 @@ def _build_research_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | No
         "away_team": signal_row.get("away_team"),
         "minute": signal_row.get("minute"),
         "research_effective_min_edge": RESEARCH_EFFECTIVE_MIN_EDGE,
-        "production_effective_min_edge": signal_row.get("effective_min_edge"),
+        "production_effective_min_edge": signal_row.get("production_effective_min_edge"),
         "yes_edge": yes_edge,
         "no_edge": no_edge,
         "yes_tradable": yes_tradable,
@@ -589,6 +798,10 @@ def _build_research_candidate(signal_row: Dict[str, Any]) -> Dict[str, Any] | No
         "no_spread": signal_row.get("no_spread"),
         "yes_ask_size": signal_row.get("yes_ask_size"),
         "no_ask_size": signal_row.get("no_ask_size"),
+        "score_state": signal_row.get("score_state"),
+        "score_state_adjustment": signal_row.get("score_state_adjustment"),
+        "base_model_probability": signal_row.get("base_model_probability"),
+        "adjusted_model_probability": signal_row.get("adjusted_model_probability"),
         "research_side": research_side,
         "research_edge": research_edge,
     }
@@ -682,6 +895,7 @@ def run_loop() -> None:
                 sizing_snapshot = size_from_signal_snapshot(signal_row, bankroll=DEFAULT_BANKROLL)
                 signal_row["recommended_notional"] = sizing_snapshot.get("recommended_notional")
                 signal_row["recommended_shares"] = sizing_snapshot.get("recommended_shares")
+                signal_row["sizing_reason"] = sizing_snapshot.get("reason")
                 side = str(signal_row.get("side") or "").upper()
                 action = str(signal_row.get("action", "") or "")
                 if action in {"BUY_YES", "BUY_NO"} and side in {"YES", "NO"}:
@@ -690,7 +904,8 @@ def run_loop() -> None:
                     except (TypeError, ValueError):
                         recommended_notional = 0.0
                     if recommended_notional > 0.0:
-                        priority_score = compute_priority_score(signal_row)
+                        priority_metrics = compute_priority_score(signal_row)
+                        priority_score = priority_metrics["priority_score"]
                         if side == "YES":
                             edge_value = signal_row.get("yes_edge")
                             spread_value = signal_row.get("yes_spread")
@@ -713,12 +928,20 @@ def run_loop() -> None:
                                 "edge": edge_value,
                                 "timestamp": signal_row.get("timestamp"),
                                 "priority_score": priority_score,
+                                "priority_edge_component": priority_metrics["priority_edge_component"],
+                                "priority_spread_multiplier": priority_metrics["priority_spread_multiplier"],
+                                "priority_liquidity_multiplier": priority_metrics["priority_liquidity_multiplier"],
+                                "priority_execution_multiplier": priority_metrics["priority_execution_multiplier"],
                                 "spread": spread_value,
                                 "ask_price": ask_price,
                                 "ask_size": ask_size,
                                 "minute": signal_row.get("minute"),
                                 "status": signal_row.get("status"),
                                 "is_live": live_flag,
+                                "score_state": signal_row.get("score_state"),
+                                "score_state_adjustment": signal_row.get("score_state_adjustment"),
+                                "base_model_probability": signal_row.get("base_model_probability"),
+                                "adjusted_model_probability": signal_row.get("adjusted_model_probability"),
                                 "mapping_row": dict(mapping_row),
                                 "market_row": dict(market_row),
                             }
@@ -745,11 +968,19 @@ def run_loop() -> None:
                     "side": row.get("side"),
                     "edge": row.get("edge"),
                     "priority_score": row.get("priority_score"),
+                    "priority_edge_component": row.get("priority_edge_component"),
+                    "priority_spread_multiplier": row.get("priority_spread_multiplier"),
+                    "priority_liquidity_multiplier": row.get("priority_liquidity_multiplier"),
+                    "priority_execution_multiplier": row.get("priority_execution_multiplier"),
                     "recommended_notional": row.get("recommended_notional"),
                     "minute": row.get("minute"),
                     "status": row.get("status"),
                     "spread": row.get("spread"),
                     "is_live": row.get("is_live"),
+                    "score_state": row.get("score_state"),
+                    "score_state_adjustment": row.get("score_state_adjustment"),
+                    "base_model_probability": row.get("base_model_probability"),
+                    "adjusted_model_probability": row.get("adjusted_model_probability"),
                 }
                 for index, row in enumerate(execution_candidates[:10])
             ],
@@ -773,7 +1004,9 @@ def run_loop() -> None:
             sizing_snapshot = size_from_signal_snapshot(refreshed_signal_row, bankroll=DEFAULT_BANKROLL)
             refreshed_signal_row["recommended_notional"] = sizing_snapshot.get("recommended_notional")
             refreshed_signal_row["recommended_shares"] = sizing_snapshot.get("recommended_shares")
-            priority_score = compute_priority_score(refreshed_signal_row)
+            refreshed_signal_row["sizing_reason"] = sizing_snapshot.get("reason")
+            priority_metrics = compute_priority_score(refreshed_signal_row)
+            priority_score = priority_metrics["priority_score"]
             try:
                 refreshed_notional = float(refreshed_signal_row.get("recommended_notional", 0.0) or 0.0)
             except (TypeError, ValueError):
@@ -795,6 +1028,10 @@ def run_loop() -> None:
 
             refreshed_signal_row["rank_at_decision"] = current_rank
             refreshed_signal_row["priority_score"] = priority_score
+            refreshed_signal_row["priority_edge_component"] = priority_metrics["priority_edge_component"]
+            refreshed_signal_row["priority_spread_multiplier"] = priority_metrics["priority_spread_multiplier"]
+            refreshed_signal_row["priority_liquidity_multiplier"] = priority_metrics["priority_liquidity_multiplier"]
+            refreshed_signal_row["priority_execution_multiplier"] = priority_metrics["priority_execution_multiplier"]
             refreshed_signal_row["edge_bucket"] = edge_bucket(relevant_edge)
             refreshed_signal_row["minute_bucket"] = minute_bucket(
                 refreshed_signal_row.get("minute"),
@@ -867,8 +1104,17 @@ def run_loop() -> None:
                 "risk_cap_notional": sizing_snapshot.get("risk_cap_notional"),
                 "book_cap_notional": sizing_snapshot.get("book_cap_notional"),
                 "edge_scale": sizing_snapshot.get("edge_scale"),
+                "production_effective_min_edge": refreshed_signal_row.get("production_effective_min_edge"),
+                "score_state": refreshed_signal_row.get("score_state"),
+                "score_state_adjustment": refreshed_signal_row.get("score_state_adjustment"),
+                "base_model_probability": refreshed_signal_row.get("base_model_probability"),
+                "adjusted_model_probability": refreshed_signal_row.get("adjusted_model_probability"),
                 "rank_at_decision": current_rank,
                 "priority_score": priority_score,
+                "priority_edge_component": priority_metrics["priority_edge_component"],
+                "priority_spread_multiplier": priority_metrics["priority_spread_multiplier"],
+                "priority_liquidity_multiplier": priority_metrics["priority_liquidity_multiplier"],
+                "priority_execution_multiplier": priority_metrics["priority_execution_multiplier"],
                 "edge_bucket": refreshed_signal_row.get("edge_bucket"),
                 "minute_bucket": refreshed_signal_row.get("minute_bucket"),
                 "is_live": refreshed_signal_row.get("is_live"),
