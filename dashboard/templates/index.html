@@ -520,6 +520,125 @@
       </div>
 
       <div class="card" style="margin-bottom: 20px;">
+        <h2>Rank Outcome Review</h2>
+        <div class="muted" style="margin-bottom: 12px;">Performance of executed trades by ranking position</div>
+        {% if rank_outcome_summary.total_settled_trades > 0 %}
+        <div class="grid risk-grid" style="margin-bottom: 14px;">
+          <div class="scan-item">
+            <div class="label">Total Settled Trades</div>
+            <div class="value">{{ rank_outcome_summary.total_settled_trades }}</div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Rank-1 Win Rate</div>
+            <div class="value">
+              {% if rank_outcome_summary.rank1_win_rate is not none %}
+                {{ "%.1f%%"|format(rank_outcome_summary.rank1_win_rate * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Rank-1 Avg ROI</div>
+            <div class="value">
+              {% if rank_outcome_summary.rank1_avg_roi is not none %}
+                {{ "%.2f%%"|format(rank_outcome_summary.rank1_avg_roi * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Rank-2+ Win Rate</div>
+            <div class="value">
+              {% if rank_outcome_summary.rank2plus_win_rate is not none %}
+                {{ "%.1f%%"|format(rank_outcome_summary.rank2plus_win_rate * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Rank-2+ Avg ROI</div>
+            <div class="value">
+              {% if rank_outcome_summary.rank2plus_avg_roi is not none %}
+                {{ "%.2f%%"|format(rank_outcome_summary.rank2plus_avg_roi * 100) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Rank-1 Total PnL</div>
+            <div class="value">
+              {% if rank_outcome_summary.rank1_total_pnl is not none %}
+                {{ "%+.2f"|format(rank_outcome_summary.rank1_total_pnl) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+          <div class="scan-item">
+            <div class="label">Rank-2+ Total PnL</div>
+            <div class="value">
+              {% if rank_outcome_summary.rank2plus_total_pnl is not none %}
+                {{ "%+.2f"|format(rank_outcome_summary.rank2plus_total_pnl) }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Rank 1</th>
+                <th>Rank 2+</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Trades</td>
+                <td>{{ rank_outcome_summary.rank1_trade_count }}</td>
+                <td>{{ rank_outcome_summary.rank2plus_trade_count }}</td>
+              </tr>
+              <tr>
+                <td>Avg Edge</td>
+                <td>{% if rank_outcome_summary.rank1_avg_edge is not none %}{{ "%.2f%%"|format(rank_outcome_summary.rank1_avg_edge * 100) }}{% else %}-{% endif %}</td>
+                <td>{% if rank_outcome_summary.rank2plus_avg_edge is not none %}{{ "%.2f%%"|format(rank_outcome_summary.rank2plus_avg_edge * 100) }}{% else %}-{% endif %}</td>
+              </tr>
+              <tr>
+                <td>Avg Priority</td>
+                <td>{% if rank_outcome_summary.rank1_avg_priority is not none %}{{ "%.2f"|format(rank_outcome_summary.rank1_avg_priority) }}{% else %}-{% endif %}</td>
+                <td>{% if rank_outcome_summary.rank2plus_avg_priority is not none %}{{ "%.2f"|format(rank_outcome_summary.rank2plus_avg_priority) }}{% else %}-{% endif %}</td>
+              </tr>
+              <tr>
+                <td>Win Rate</td>
+                <td>{% if rank_outcome_summary.rank1_win_rate is not none %}{{ "%.1f%%"|format(rank_outcome_summary.rank1_win_rate * 100) }}{% else %}-{% endif %}</td>
+                <td>{% if rank_outcome_summary.rank2plus_win_rate is not none %}{{ "%.1f%%"|format(rank_outcome_summary.rank2plus_win_rate * 100) }}{% else %}-{% endif %}</td>
+              </tr>
+              <tr>
+                <td>Avg ROI</td>
+                <td>{% if rank_outcome_summary.rank1_avg_roi is not none %}{{ "%.2f%%"|format(rank_outcome_summary.rank1_avg_roi * 100) }}{% else %}-{% endif %}</td>
+                <td>{% if rank_outcome_summary.rank2plus_avg_roi is not none %}{{ "%.2f%%"|format(rank_outcome_summary.rank2plus_avg_roi * 100) }}{% else %}-{% endif %}</td>
+              </tr>
+              <tr>
+                <td>Total PnL</td>
+                <td>{% if rank_outcome_summary.rank1_total_pnl is not none %}{{ "%+.2f"|format(rank_outcome_summary.rank1_total_pnl) }}{% else %}-{% endif %}</td>
+                <td>{% if rank_outcome_summary.rank2plus_total_pnl is not none %}{{ "%+.2f"|format(rank_outcome_summary.rank2plus_total_pnl) }}{% else %}-{% endif %}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="empty">No settled trades available yet.</div>
+        {% endif %}
+      </div>
+
+      <div class="card" style="margin-bottom: 20px;">
         <h2>Risk Limits</h2>
         <div class="grid risk-grid" style="margin-bottom: 14px;">
           <div class="scan-item">

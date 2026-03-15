@@ -526,6 +526,145 @@ def build_missed_top_rank_review(signal_event_rows: Iterable[dict]) -> dict:
     }
 
 
+def get_rank_outcome_summary(
+    paper_trade_rows: Iterable[dict],
+    settlement_rows: Iterable[dict],
+    signal_event_rows: Iterable[dict],
+) -> dict:
+    def key_for(row: dict) -> tuple[str, str, str]:
+        return (
+            str(row.get("fixture_id", "") or ""),
+            str(row.get("market_name", "") or ""),
+            str(row.get("side", "") or ""),
+        )
+
+    signal_fallback: Dict[tuple[str, str, str], dict] = {}
+    for row in signal_event_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "buy_signal":
+            continue
+        data = row.get("data", {})
+        if not isinstance(data, dict) or data.get("executed") is not True:
+            continue
+        signal_fallback[key_for(data)] = data
+
+    latest_entry_by_key: Dict[tuple[str, str, str], dict] = {}
+    for row in paper_trade_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "paper_entry":
+            continue
+        latest_entry_by_key[key_for(row)] = row
+
+    settled_rows: List[dict] = []
+    for row in settlement_rows:
+        if not isinstance(row, dict) or str(row.get("event_type", "") or "") != "paper_settlement":
+            continue
+        settled_rows.append(row)
+
+    metrics = {
+        "total_settled_trades": 0,
+        "rank1_trade_count": 0,
+        "rank2plus_trade_count": 0,
+        "rank1_edges": [],
+        "rank2plus_edges": [],
+        "rank1_priorities": [],
+        "rank2plus_priorities": [],
+        "rank1_rois": [],
+        "rank2plus_rois": [],
+        "rank1_wins": 0,
+        "rank2plus_wins": 0,
+        "rank1_total_pnl": 0.0,
+        "rank2plus_total_pnl": 0.0,
+        "overall_edges": [],
+        "overall_rois": [],
+        "overall_total_pnl": 0.0,
+    }
+
+    for settlement in settled_rows:
+        settlement_key = key_for(settlement)
+        entry = latest_entry_by_key.get(settlement_key, {})
+        fallback = signal_fallback.get(settlement_key, {})
+        rank_value = entry.get("rank_at_decision", fallback.get("rank_at_decision"))
+        try:
+            rank_at_decision = int(rank_value) if rank_value is not None else None
+        except (TypeError, ValueError):
+            rank_at_decision = None
+
+        edge_value = entry.get("entry_edge", fallback.get("edge"))
+        priority_value = entry.get("priority_score", fallback.get("priority_score"))
+        roi_value = settlement.get("roi")
+        pnl_value = settlement.get("gross_pnl")
+
+        try:
+            roi = float(roi_value) if roi_value is not None else None
+        except (TypeError, ValueError):
+            roi = None
+        try:
+            pnl = float(pnl_value) if pnl_value is not None else 0.0
+        except (TypeError, ValueError):
+            pnl = 0.0
+        try:
+            edge = float(edge_value) if edge_value is not None else None
+        except (TypeError, ValueError):
+            edge = None
+        try:
+            priority = float(priority_value) if priority_value is not None else None
+        except (TypeError, ValueError):
+            priority = None
+
+        metrics["total_settled_trades"] += 1
+        metrics["overall_total_pnl"] += pnl
+        if edge is not None:
+            metrics["overall_edges"].append(edge)
+        if roi is not None:
+            metrics["overall_rois"].append(roi)
+
+        if rank_at_decision == 1:
+            metrics["rank1_trade_count"] += 1
+            metrics["rank1_total_pnl"] += pnl
+            if edge is not None:
+                metrics["rank1_edges"].append(edge)
+            if priority is not None:
+                metrics["rank1_priorities"].append(priority)
+            if roi is not None:
+                metrics["rank1_rois"].append(roi)
+                if roi > 0:
+                    metrics["rank1_wins"] += 1
+        elif rank_at_decision is not None and rank_at_decision > 1:
+            metrics["rank2plus_trade_count"] += 1
+            metrics["rank2plus_total_pnl"] += pnl
+            if edge is not None:
+                metrics["rank2plus_edges"].append(edge)
+            if priority is not None:
+                metrics["rank2plus_priorities"].append(priority)
+            if roi is not None:
+                metrics["rank2plus_rois"].append(roi)
+                if roi > 0:
+                    metrics["rank2plus_wins"] += 1
+
+    def avg(values: list[float]) -> float | None:
+        return (sum(values) / len(values)) if values else None
+
+    rank1_count = metrics["rank1_trade_count"]
+    rank2plus_count = metrics["rank2plus_trade_count"]
+    return {
+        "total_settled_trades": metrics["total_settled_trades"],
+        "rank1_trade_count": rank1_count,
+        "rank1_avg_edge": avg(metrics["rank1_edges"]),
+        "rank1_avg_priority": avg(metrics["rank1_priorities"]),
+        "rank1_avg_roi": avg(metrics["rank1_rois"]),
+        "rank1_win_rate": (metrics["rank1_wins"] / rank1_count) if rank1_count > 0 else None,
+        "rank1_total_pnl": metrics["rank1_total_pnl"],
+        "rank2plus_trade_count": rank2plus_count,
+        "rank2plus_avg_edge": avg(metrics["rank2plus_edges"]),
+        "rank2plus_avg_priority": avg(metrics["rank2plus_priorities"]),
+        "rank2plus_avg_roi": avg(metrics["rank2plus_rois"]),
+        "rank2plus_win_rate": (metrics["rank2plus_wins"] / rank2plus_count) if rank2plus_count > 0 else None,
+        "rank2plus_total_pnl": metrics["rank2plus_total_pnl"],
+        "overall_avg_edge": avg(metrics["overall_edges"]),
+        "overall_avg_roi": avg(metrics["overall_rois"]),
+        "overall_total_pnl": metrics["overall_total_pnl"],
+    }
+
+
 def sum_open_positions(positions_payload: dict) -> dict:
     positions = positions_payload.get("positions", []) if isinstance(positions_payload, dict) else []
     open_positions = 0
@@ -757,6 +896,11 @@ def index() -> str:
     signal_quality_summary = build_signal_quality_summary(signal_event_rows, paper_trade_rows)
     decision_audit_summary = build_decision_audit_summary(signal_event_rows)
     missed_top_rank_review = build_missed_top_rank_review(signal_event_rows)
+    rank_outcome_summary = get_rank_outcome_summary(
+        paper_trade_rows,
+        all_settlement_rows,
+        signal_event_rows,
+    )
     latest_scan_cards = build_latest_scan_cards(latest_scan_summary)
     latest_scan_bucket_counts = format_bucket_counts(latest_scan_summary.get("bucket_counts"))
     latest_scan_timestamp = format_scan_timestamp(latest_scan_summary.get("timestamp"))
@@ -777,6 +921,7 @@ def index() -> str:
         signal_quality_summary=signal_quality_summary,
         decision_audit_summary=decision_audit_summary,
         missed_top_rank_review=missed_top_rank_review,
+        rank_outcome_summary=rank_outcome_summary,
         latest_scan_cards=latest_scan_cards,
         latest_scan_bucket_counts=latest_scan_bucket_counts,
         latest_scan_timestamp=latest_scan_timestamp,
